@@ -1,0 +1,14 @@
+# Utilizo UV para executar o projeto, então a configuração do pyproject.toml é necessária para definir as dependências e as informações do projeto. O código abaixo é um exemplo de como configurar o pyproject.toml para um projeto chamado "pdf-translate" que utiliza FastAPI, Uvicorn, python-multipart e pdf2zh.
+[project]
+name = "pdf-translate"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+]
+
+[tool.uv]
+# pdf2zh-next é instalado como ferramenta separada:
+#   uv tool install --python 3.12 pdf2zh-next

@@ -1,0 +1,38 @@
+# Ambiente virtual Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# uv
+.uv/
+uv.lock
+
+# PDFs de upload temporários
+/tmp/pdf2zh_uploads/
+
+# Arquivos de saída do pdf2zh (traduzidos)
+*-mono.pdf
+*-dual.pdf
+
+# Configuração local e segredos
+.env
+.env.*
+!.env.example
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

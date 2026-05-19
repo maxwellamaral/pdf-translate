@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF Translate</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    #terminal { font-family: 'JetBrains Mono', monospace; }
+    select option { background: #1f2937; }
+    details > summary { list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+  <div class="max-w-6xl mx-auto p-6">
+
+    <!-- Header -->
+    <header class="mb-8 flex items-center gap-3">
+      <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold text-lg select-none">T</div>
+      <div>
+        <h1 class="text-2xl font-semibold text-white leading-tight">PDF Translate</h1>
+        <p class="text-gray-500 text-sm">Tradução de PDFs acadêmicos preservando formatação</p>
+      </div>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+
+      <!-- Form Panel -->
+      <div class="lg:col-span-2 bg-gray-900 rounded-2xl p-6 space-y-5">
+        <form id="form" class="space-y-5">
+
+          <!-- File Input -->
+          <div>
+            <label class="block text-sm font-medium text-gray-300 mb-2">Arquivo PDF</label>
+            <div id="dropzone"
+                 class="border-2 border-dashed border-gray-700 rounded-xl p-5 text-center cursor-pointer hover:border-blue-500 hover:bg-blue-950/20 transition-all duration-200"
+                 onclick="document.getElementById('file-input').click()"
+                 ondragover="event.preventDefault(); this.classList.add('border-blue-500','bg-blue-950/20')"
+                 ondragleave="this.classList.remove('border-blue-500','bg-blue-950/20')"
+                 ondrop="handleDrop(event)">
+              <svg class="w-7 h-7 text-gray-600 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+              </svg>
+              <p class="text-gray-400 text-sm">Arraste e solte ou <span class="text-blue-400">clique aqui</span></p>
+              <p id="file-label" class="text-blue-300 text-xs mt-1 hidden font-medium"></p>
+              <input type="file" id="file-input" accept=".pdf" class="hidden" onchange="onFileSelect(this)" />
+            </div>
+            <p class="text-gray-600 text-xs mt-2 text-center">— ou informe o caminho completo —</p>
+            <input type="text" id="file-path" name="file_path"
+                   placeholder="/caminho/para/arquivo.pdf"
+                   class="w-full mt-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm placeholder-gray-600 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition-colors" />
+          </div>
+
+          <!-- Languages -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-gray-400 mb-1">Idioma de origem</label>
+              <select name="lang_in" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 transition-colors">
+                <option value="en" selected>🇺🇸 English</option>
+                <option value="zh">🇨🇳 Chinese</option>
+                <option value="ja">🇯🇵 Japanese</option>
+                <option value="ko">🇰🇷 Korean</option>
+                <option value="fr">🇫🇷 French</option>
+                <option value="de">🇩🇪 German</option>
+                <option value="es">🇪🇸 Spanish</option>
+                <option value="pt">🇧🇷 Portuguese</option>
+                <option value="ru">🇷🇺 Russian</option>
+                <option value="ar">🇸🇦 Arabic</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-400 mb-1">Idioma de destino</label>
+              <select name="lang_out" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 transition-colors">
+                <option value="pt" selected>🇧🇷 Português</option>
+                <option value="en">🇺🇸 English</option>
+                <option value="zh-CN">🇨🇳 Chinese (Simplified)</option>
+                <option value="zh-TW">🇹🇼 Chinese (Traditional)</option>
+                <option value="ja">🇯🇵 Japanese</option>
+                <option value="ko">🇰🇷 Korean</option>
+                <option value="fr">🇫🇷 French</option>
+                <option value="de">🇩🇪 German</option>
+                <option value="es">🇪🇸 Spanish</option>
+                <option value="ru">🇷🇺 Russian</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Service -->
+          <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1">Serviço de tradução</label>
+            <select id="service" name="service" onchange="onServiceChange()"
+                    class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500 transition-colors">
+              <optgroup label="Local">
+                <option value="ollama" selected>Ollama</option>
+              </optgroup>
+              <optgroup label="Gratuito">
+                <option value="google">Google Translate</option>
+                <option value="bing">Bing Translate</option>
+              </optgroup>
+              <optgroup label="LLM / API">
+                <option value="openai">OpenAI</option>
+                <option value="gemini">Gemini</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="groq">Groq</option>
+                <option value="grok">Grok (xAI)</option>
+                <option value="deepl">DeepL</option>
+                <option value="openaicompatible">OpenAI-Compatible</option>
+              </optgroup>
+            </select>
+          </div>
+
+          <!-- Model (LLM only) -->
+          <div id="model-group">
+            <label class="block text-xs font-medium text-gray-400 mb-1">Modelo</label>
+            <input type="text" id="model" name="model" value="translategemma:4b"
+                   class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors" />
+          </div>
+
+          <!-- Ollama host -->
+          <div id="ollama-host-group">
+            <label class="block text-xs font-medium text-gray-400 mb-1">
+              Ollama Host
+              <span class="text-gray-600 font-normal">(padrão: 127.0.0.1:11434)</span>
+            </label>
+            <input type="text" name="ollama_host" placeholder="http://127.0.0.1:11434"
+                   class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors" />
+          </div>
+
+          <!-- Advanced options -->
+          <details>
+            <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors select-none flex items-center gap-1">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+              </svg>
+              Opções avançadas
+            </summary>
+            <div class="mt-3 space-y-3 border-l-2 border-gray-800 pl-3">
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block text-xs text-gray-500 mb-1">Páginas</label>
+                  <input type="text" name="pages" placeholder="ex: 1-3,5"
+                         class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs placeholder-gray-600 focus:outline-none focus:border-blue-500" />
+                </div>
+                <div>
+                  <label class="block text-xs text-gray-500 mb-1">Workers</label>
+                  <input type="number" name="workers" value="1" min="1" max="32"
+                         class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500" />
+                </div>
+              </div>
+              <div>
+                <label class="block text-xs text-gray-500 mb-1">Diretório de saída</label>
+                <input type="text" name="output_dir" placeholder="padrão: mesmo diretório do arquivo"
+                       class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs placeholder-gray-600 focus:outline-none focus:border-blue-500" />
+              </div>
+              <label class="flex items-center gap-2 cursor-pointer group">
+                <input type="checkbox" name="no_auto_extract_glossary" checked class="w-4 h-4 rounded bg-gray-800 border-gray-600 accent-blue-500" />
+                <span class="text-xs text-gray-400 group-hover:text-gray-200 transition-colors">Desativar extração automática de glossário <code class="text-gray-500">(--no-auto-extract-glossary)</code></span>
+              </label>
+            </div>
+          </details>
+
+          <!-- Submit -->
+          <button type="submit" id="submit-btn"
+                  class="w-full bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-medium rounded-xl px-4 py-3 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 flex items-center justify-center gap-2">
+            <svg id="btn-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+            <span id="btn-text">Traduzir</span>
+          </button>
+
+        </form>
+      </div>
+
+      <!-- Terminal Panel -->
+      <div class="lg:col-span-3 bg-gray-900 rounded-2xl overflow-hidden flex flex-col" style="min-height: 520px;">
+        <!-- Terminal titlebar -->
+        <div class="bg-gray-800/60 px-4 py-3 flex items-center gap-2 border-b border-gray-800 shrink-0">
+          <div class="flex gap-1.5">
+            <div class="w-3 h-3 rounded-full bg-red-500/70"></div>
+            <div class="w-3 h-3 rounded-full bg-yellow-500/70"></div>
+            <div class="w-3 h-3 rounded-full bg-green-500/70"></div>
+          </div>
+          <span class="text-gray-500 text-xs ml-1 font-mono">pdf2zh — output</span>
+          <div id="status-badge" class="ml-auto text-xs font-mono"></div>
+        </div>
+        <!-- Output -->
+        <div id="terminal"
+             class="flex-1 p-4 text-xs text-green-400 overflow-y-auto bg-gray-950/60 whitespace-pre-wrap break-all"
+             style="min-height: 460px;">
+          <span class="text-gray-600 italic">Aguardando tradução...</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const LLM_SERVICES = new Set([
+      'ollama','openai','deepseek','gemini','groq','grok','openaicompatible',
+    ]);
+
+    const DEFAULT_MODELS = {
+      ollama:           'translategemma:4b',
+      openai:           'gpt-4o-mini',
+      gemini:           'gemini-2.0-flash',
+      deepseek:         'deepseek-chat',
+      groq:             'llama-3-3-70b-versatile',
+      grok:             'grok-2-1212',
+      openaicompatible: '',
+    };
+
+    function onServiceChange() {
+      const service = document.getElementById('service').value;
+      const modelGroup = document.getElementById('model-group');
+      const ollamaGroup = document.getElementById('ollama-host-group');
+      const modelInput = document.getElementById('model');
+
+      modelGroup.style.display = LLM_SERVICES.has(service) ? '' : 'none';
+      ollamaGroup.style.display = service === 'ollama' ? '' : 'none';
+
+      if (DEFAULT_MODELS[service] !== undefined) {
+        modelInput.value = DEFAULT_MODELS[service];
+      }
+    }
+
+    function onFileSelect(input) {
+      if (!input.files[0]) return;
+      const label = document.getElementById('file-label');
+      label.textContent = '📄 ' + input.files[0].name;
+      label.classList.remove('hidden');
+      document.getElementById('file-path').value = '';
+    }
+
+    function handleDrop(e) {
+      e.preventDefault();
+      e.currentTarget.classList.remove('border-blue-500', 'bg-blue-950/20');
+      const file = e.dataTransfer.files[0];
+      if (file && file.name.toLowerCase().endsWith('.pdf')) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        const input = document.getElementById('file-input');
+        input.files = dt.files;
+        onFileSelect(input);
+      }
+    }
+
+    // Strip ANSI escape sequences
+    function stripAnsi(str) {
+      return str.replace(/\x1b\[[0-9;]*[mGKJHFABCDsu]/g, '')
+                .replace(/\x1b\[\?[0-9;]*[lh]/g, '')
+                .replace(/\r/g, '');
+    }
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const terminal = document.getElementById('terminal');
+      const submitBtn = document.getElementById('submit-btn');
+      const btnText = document.getElementById('btn-text');
+      const statusBadge = document.getElementById('status-badge');
+
+      terminal.innerHTML = '';
+      submitBtn.disabled = true;
+      btnText.textContent = 'Traduzindo...';
+      statusBadge.innerHTML = '<span class="text-yellow-400 animate-pulse">● em andamento</span>';
+
+      const formData = new FormData();
+      const fileInput = document.getElementById('file-input');
+      const filePath = document.getElementById('file-path').value.trim();
+
+      if (fileInput.files[0]) {
+        formData.append('file', fileInput.files[0]);
+      } else {
+        formData.append('file_path', filePath);
+      }
+
+      const getVal = (name) => {
+        const el = form.elements[name];
+        if (!el) return '';
+        return el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : (el.value || '');
+      };
+
+      ['lang_in','lang_out','service','model','pages','workers','output_dir','ollama_host','no_auto_extract_glossary']
+        .forEach(f => formData.append(f, getVal(f)));
+
+      try {
+        const resp = await fetch('/translate', { method: 'POST', body: formData });
+        const data = await resp.json();
+
+        if (data.error) {
+          terminal.innerHTML = `<span class="text-red-400">Erro: ${data.error}</span>`;
+          statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
+          submitBtn.disabled = false;
+          btnText.textContent = 'Traduzir';
+          return;
+        }
+
+        // Show the command being run
+        terminal.insertAdjacentHTML('beforeend',
+          `<span class="text-gray-500">$ ${data.cmd}</span>\n\n`);
+
+        // Stream SSE output
+        const evtSource = new EventSource(`/stream/${data.job_id}`);
+        evtSource.onmessage = (ev) => {
+          const msg = JSON.parse(ev.data);
+
+          if (msg.line) {
+            terminal.insertAdjacentText('beforeend', stripAnsi(msg.line));
+            terminal.scrollTop = terminal.scrollHeight;
+          }
+
+          if (msg.done) {
+            evtSource.close();
+            submitBtn.disabled = false;
+            btnText.textContent = 'Traduzir';
+            terminal.scrollTop = terminal.scrollHeight;
+
+            if (msg.returncode === 0) {
+              statusBadge.innerHTML = '<span class="text-green-400">✓ concluído</span>';
+              terminal.insertAdjacentHTML('beforeend',
+                '\n<span class="text-green-400 font-semibold">✓ Tradução concluída!</span>');
+            } else {
+              statusBadge.innerHTML = `<span class="text-red-400">✗ erro (${msg.returncode})</span>`;
+              terminal.insertAdjacentHTML('beforeend',
+                `\n<span class="text-red-400">✗ Encerrado com erro (código ${msg.returncode})</span>`);
+            }
+          }
+
+          if (msg.error) {
+            evtSource.close();
+            terminal.insertAdjacentHTML('beforeend',
+              `\n<span class="text-red-400">${msg.error}</span>`);
+            submitBtn.disabled = false;
+            btnText.textContent = 'Traduzir';
+          }
+        };
+
+        evtSource.onerror = () => {
+          evtSource.close();
+          submitBtn.disabled = false;
+          btnText.textContent = 'Traduzir';
+          statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
+          terminal.insertAdjacentHTML('beforeend',
+            '\n<span class="text-red-400">✗ Conexão perdida. Verifique se o servidor está rodando e se pdf2zh está instalado no PATH.</span>');
+          terminal.scrollTop = terminal.scrollHeight;
+        };
+
+      } catch (err) {
+        terminal.innerHTML = `<span class="text-red-400">Erro de rede: ${err.message}</span>`;
+        submitBtn.disabled = false;
+        btnText.textContent = 'Traduzir';
+      }
+    });
+  </script>
+</body>
+</html>
