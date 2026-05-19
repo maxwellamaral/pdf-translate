@@ -172,6 +172,13 @@
             </svg>
             <span id="btn-text">Traduzir</span>
           </button>
+          <button type="button" id="cancel-btn" style="display:none"
+                  class="w-full bg-red-800 hover:bg-red-700 active:scale-95 text-white font-medium rounded-xl px-4 py-3 transition-all flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+            <span>Cancelar</span>
+          </button>
 
         </form>
       </div>
@@ -214,6 +221,15 @@
     fitAddon.fit();
     term.write('\x1b[90mAguardando tradução...\x1b[0m');
     window.addEventListener('resize', () => fitAddon.fit());
+
+    let currentEvtSource = null;
+    let currentJobId = null;
+
+    function resetUI() {
+      document.getElementById('submit-btn').disabled = false;
+      document.getElementById('cancel-btn').style.display = 'none';
+      document.getElementById('btn-text').textContent = 'Traduzir';
+    }
 
     // ── Serviços LLM ─────────────────────────────────────────────────────────
     const LLM_SERVICES = new Set([
@@ -269,12 +285,14 @@
       e.preventDefault();
       const form = e.target;
       const submitBtn = document.getElementById('submit-btn');
+      const cancelBtn = document.getElementById('cancel-btn');
       const btnText = document.getElementById('btn-text');
       const statusBadge = document.getElementById('status-badge');
 
       term.reset();
       fitAddon.fit();
       submitBtn.disabled = true;
+      cancelBtn.style.display = '';
       btnText.textContent = 'Traduzindo...';
       statusBadge.innerHTML = '<span class="text-yellow-400 animate-pulse">● em andamento</span>';
 
@@ -304,17 +322,15 @@
         if (data.error) {
           term.write('\x1b[31mErro: ' + data.error + '\x1b[0m');
           statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
-          submitBtn.disabled = false;
-          btnText.textContent = 'Traduzir';
+          resetUI();
           return;
         }
 
-        // Exibe o comando executado
+        currentJobId = data.job_id;
         term.write('\x1b[90m$ ' + data.cmd + '\x1b[0m\r\n\r\n');
 
-        // Streaming SSE — xterm.js interpreta ANSI e \r nativamente
-        const evtSource = new EventSource(`/stream/${data.job_id}`);
-        evtSource.onmessage = (ev) => {
+        currentEvtSource = new EventSource(`/stream/${data.job_id}`);
+        currentEvtSource.onmessage = (ev) => {
           const msg = JSON.parse(ev.data);
 
           if (msg.line) {
@@ -322,10 +338,8 @@
           }
 
           if (msg.done) {
-            evtSource.close();
-            submitBtn.disabled = false;
-            btnText.textContent = 'Traduzir';
-
+            currentEvtSource.close();
+            currentEvtSource = null;
             if (msg.returncode === 0) {
               statusBadge.innerHTML = '<span class="text-green-400">✓ concluído</span>';
               term.write('\r\n\x1b[32;1m✓ Tradução concluída!\x1b[0m');
@@ -333,30 +347,47 @@
               statusBadge.innerHTML = `<span class="text-red-400">✗ erro (${msg.returncode})</span>`;
               term.write(`\r\n\x1b[31m✗ Encerrado com erro (código ${msg.returncode})\x1b[0m`);
             }
+            resetUI();
           }
 
           if (msg.error) {
-            evtSource.close();
+            currentEvtSource.close();
+            currentEvtSource = null;
             term.write('\r\n\x1b[31m' + msg.error + '\x1b[0m');
-            submitBtn.disabled = false;
-            btnText.textContent = 'Traduzir';
+            resetUI();
           }
         };
 
-        evtSource.onerror = () => {
-          evtSource.close();
-          submitBtn.disabled = false;
-          btnText.textContent = 'Traduzir';
+        currentEvtSource.onerror = () => {
+          if (!currentEvtSource) return;
+          currentEvtSource.close();
+          currentEvtSource = null;
           statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
           term.write('\r\n\x1b[31m✗ Conexão perdida. Verifique se o servidor está rodando e se pdf2zh está instalado no PATH.\x1b[0m');
+          resetUI();
         };
 
       } catch (err) {
         term.reset();
         term.write('\x1b[31mErro de rede: ' + err.message + '\x1b[0m');
-        submitBtn.disabled = false;
-        btnText.textContent = 'Traduzir';
+        resetUI();
       }
+    });
+
+    document.getElementById('cancel-btn').addEventListener('click', async () => {
+      if (currentEvtSource) {
+        currentEvtSource.close();
+        currentEvtSource = null;
+      }
+      const jid = currentJobId;
+      currentJobId = null;
+      if (jid) {
+        try { await fetch(`/cancel/${jid}`, { method: 'POST' }); } catch (_) {}
+      }
+      document.getElementById('status-badge').innerHTML =
+        '<span class="text-yellow-400">⦸ cancelado</span>';
+      term.write('\r\n\x1b[33m⦸ Tradução cancelada pelo usuário.\x1b[0m');
+      resetUI();
     });
   </script>
 </body>

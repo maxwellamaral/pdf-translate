@@ -148,6 +148,7 @@ async def stream_output(job_id: str):
             return
 
         os.close(slave_fd)  # fecha o lado escravo no processo pai
+        jobs[job_id]["process"] = process
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
@@ -190,3 +191,18 @@ async def stream_output(job_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/cancel/{job_id}")
+async def cancel_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        return {"ok": False, "reason": "Job não encontrado"}
+    process = job.get("process")
+    if process and process.returncode is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        return {"ok": True}
+    return {"ok": False, "reason": "Processo não está em execução"}
