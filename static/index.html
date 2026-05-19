@@ -193,7 +193,17 @@
             <div class="w-3 h-3 rounded-full bg-green-500/70"></div>
           </div>
           <span class="text-gray-500 text-xs ml-1 font-mono">pdf2zh — output</span>
-          <div id="status-badge" class="ml-auto text-xs font-mono"></div>
+          <div class="ml-auto flex items-center gap-3">
+            <button id="download-log-btn" style="display:none"
+              onclick="downloadLog()"
+              class="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400 hover:text-white bg-gray-700/60 hover:bg-gray-700 active:scale-95 px-2.5 py-1 rounded-lg transition-all">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+              </svg>
+              Log
+            </button>
+            <div id="status-badge" class="text-xs font-mono"></div>
+          </div>
         </div>
         <!-- Output -->
         <div id="terminal" class="flex-1" style="min-height: 460px; padding: 4px; overflow: hidden;"></div>
@@ -233,6 +243,20 @@
 
     let currentEvtSource = null;
     let currentJobId = null;
+    let logLines = [];
+
+    const ANSI_RE = /\x1b\[[\d;]*[A-Za-z]|\x1b[()][AB012]/g;
+
+    function downloadLog() {
+      const text = logLines.join('').replace(ANSI_RE, '');
+      const blob = new Blob([text], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (currentJobId ? 'pdf2zh-' + currentJobId.slice(0, 8) : 'pdf2zh') + '.log';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
 
     function resetUI() {
       document.getElementById('submit-btn').disabled = false;
@@ -316,6 +340,8 @@
 
       term.reset();
       fitAddon.fit();
+      logLines = [];
+      document.getElementById('download-log-btn').style.display = 'none';
       document.getElementById('downloads').classList.add('hidden');
       document.getElementById('download-links').innerHTML = '';
       submitBtn.disabled = true;
@@ -362,6 +388,7 @@
 
           if (msg.line) {
             term.write(msg.line);
+            logLines.push(msg.line);
           }
 
           if (msg.done) {
@@ -377,6 +404,7 @@
               statusBadge.innerHTML = `<span class="text-red-400">✗ erro (${msg.returncode})</span>`;
               term.write(`\r\n\x1b[31m✗ Encerrado com erro (código ${msg.returncode})\x1b[0m`);
             }
+            document.getElementById('download-log-btn').style.display = '';
             resetUI();
           }
 
@@ -384,6 +412,7 @@
             currentEvtSource.close();
             currentEvtSource = null;
             term.write('\r\n\x1b[31m' + msg.error + '\x1b[0m');
+            document.getElementById('download-log-btn').style.display = '';
             resetUI();
           }
         };
