@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="PDF Translate")
@@ -99,16 +99,20 @@ async def translate(
     if workers.strip():
         cmd += ["--pool-max-workers", workers.strip()]
 
-    # Output directory
-    if output_dir.strip():
-        cmd += ["--output", output_dir.strip()]
+    # Output directory — sempre especificado para saída previsível (evita o CWD do servidor)
+    effective_out_dir = output_dir.strip() or str(UPLOAD_DIR)
+    cmd += ["--output", effective_out_dir]
 
     # Skip automatic glossary extraction (speeds up translation significantly)
     if no_auto_extract_glossary.lower() == "true":
         cmd.append("--no-auto-extract-glossary")
-
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {"cmd": cmd, "env": {}}
+    jobs[job_id] = {
+        "cmd": cmd,
+        "env": {},
+        "input_path": actual_path,
+        "output_dir": effective_out_dir,
+    }
 
     return {"job_id": job_id, "cmd": " ".join(cmd)}
 
@@ -184,7 +188,15 @@ async def stream_output(job_id: str):
                     pass
 
         await process.wait()
-        yield f"data: {json.dumps({'done': True, 'returncode': process.returncode})}\n\n"
+        # Detecta arquivos gerados por pdf2zh-next (-mono.pdf e -dual.pdf)
+        output_files: list[str] = []
+        if process.returncode == 0:
+            in_stem = Path(job.get("input_path", "")).stem
+            out_dir = Path(job.get("output_dir", str(UPLOAD_DIR)))
+            # pdf2zh-next usa {stem}.{lang_out}.mono.pdf / {stem}.{lang_out}.dual.pdf
+            for pattern in [f"{in_stem}.*.mono.pdf", f"{in_stem}.*.dual.pdf"]:
+                output_files.extend(f.name for f in sorted(out_dir.glob(pattern)))
+        yield f"data: {json.dumps({'done': True, 'returncode': process.returncode, 'files': output_files})}\n\n"
 
     return StreamingResponse(
         generate(),
@@ -206,3 +218,24 @@ async def cancel_job(job_id: str):
             pass
         return {"ok": True}
     return {"ok": False, "reason": "Processo não está em execução"}
+
+
+@app.get("/download/{job_id}/{filename}")
+async def download_file(job_id: str, filename: str):
+    job = jobs.get(job_id)
+    if not job:
+        return {"error": "Job não encontrado"}
+    # Segurança: rejeita path traversal e arquivos que não sejam PDF
+    safe_name = Path(filename).name
+    if safe_name != filename or not safe_name.lower().endswith(".pdf"):
+        return {"error": "Nome de arquivo inválido"}
+    out_dir = Path(job.get("output_dir", str(UPLOAD_DIR))).resolve()
+    file_path = (out_dir / safe_name).resolve()
+    # Segurança: garante que o arquivo está dentro do diretório permitido
+    try:
+        file_path.relative_to(out_dir)
+    except ValueError:
+        return {"error": "Acesso negado"}
+    if not file_path.exists():
+        return {"error": "Arquivo não encontrado"}
+    return FileResponse(path=file_path, filename=safe_name, media_type="application/pdf")

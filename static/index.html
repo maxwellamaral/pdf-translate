@@ -200,6 +200,15 @@
       </div>
 
     </div>
+
+    <!-- Downloads -->
+    <div id="downloads" class="hidden mt-4">
+      <div class="bg-gray-900 rounded-2xl p-5">
+        <p class="text-sm font-medium text-gray-300 mb-3">Arquivos gerados</p>
+        <div id="download-links" class="flex gap-3 flex-wrap"></div>
+      </div>
+    </div>
+
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
@@ -229,6 +238,22 @@
       document.getElementById('submit-btn').disabled = false;
       document.getElementById('cancel-btn').style.display = 'none';
       document.getElementById('btn-text').textContent = 'Traduzir';
+    }
+
+    function showDownloads(files, jobId) {
+      const links = document.getElementById('download-links');
+      links.innerHTML = '';
+      files.forEach(filename => {
+        const a = document.createElement('a');
+        a.href = `/download/${jobId}/${encodeURIComponent(filename)}`;
+        a.download = filename;
+        a.className = 'inline-flex items-center gap-2 bg-blue-700 hover:bg-blue-600 active:scale-95 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all';
+        a.textContent = filename.includes('-mono.') ? '⬇️ Mono'
+                       : filename.includes('-dual.') ? '⬇️ Dual (bilíngue)'
+                       : '⬇️ ' + filename;
+        links.appendChild(a);
+      });
+      document.getElementById('downloads').classList.remove('hidden');
     }
 
     // ── Serviços LLM ─────────────────────────────────────────────────────────
@@ -291,6 +316,8 @@
 
       term.reset();
       fitAddon.fit();
+      document.getElementById('downloads').classList.add('hidden');
+      document.getElementById('download-links').innerHTML = '';
       submitBtn.disabled = true;
       cancelBtn.style.display = '';
       btnText.textContent = 'Traduzindo...';
@@ -343,6 +370,9 @@
             if (msg.returncode === 0) {
               statusBadge.innerHTML = '<span class="text-green-400">✓ concluído</span>';
               term.write('\r\n\x1b[32;1m✓ Tradução concluída!\x1b[0m');
+              if (msg.files && msg.files.length > 0) {
+                showDownloads(msg.files, currentJobId);
+              }
             } else {
               statusBadge.innerHTML = `<span class="text-red-400">✗ erro (${msg.returncode})</span>`;
               term.write(`\r\n\x1b[31m✗ Encerrado com erro (código ${msg.returncode})\x1b[0m`);
