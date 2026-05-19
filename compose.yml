@@ -9,7 +9,7 @@ services:
     container_name: pdf-translate-app
     # Porta aleatória no host — descoberta com: docker compose port app 8000
     ports:
-      - "127.0.0.1::8000"
+      - "127.0.0.1:55141:8000"
     volumes:
       # Persiste uploads e PDFs traduzidos localmente
       - ./data/uploads:/tmp/pdf2zh_uploads
