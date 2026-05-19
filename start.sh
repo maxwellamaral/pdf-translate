@@ -1,4 +1,28 @@
 #!/usr/bin/env bash
+# pdf-translate — script de inicialização
+#
+# Uso:
+#   ./start.sh [local|docker|docker-update]
+#
+# Modos:
+#   local           Executa a aplicação localmente via uv (padrão).
+#                   Instala pdf2zh-next se ausente e sobe o servidor em
+#                   http://0.0.0.0:8000 com hot-reload.
+#                   Variáveis opcionais: HOST, PORT
+#
+#   docker          Constrói a imagem Docker (se desatualizada) e sobe a
+#                   stack via Docker Compose. A URL com a porta aleatória
+#                   é exibida no final.
+#
+#   docker-update   Reconstrói a imagem do zero (--no-cache) e recria os
+#                   containers. Use após mudanças no Dockerfile ou
+#                   dependências do sistema.
+#
+# Exemplos:
+#   ./start.sh                  # modo local
+#   ./start.sh docker           # sobe via Docker
+#   ./start.sh docker-update    # rebuild completo
+#   PORT=9000 ./start.sh local  # local em porta customizada
 set -euo pipefail
 
 MODE="${1:-local}"
