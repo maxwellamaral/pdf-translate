@@ -87,6 +87,20 @@ case "$MODE" in
 
     HOST="${HOST:-0.0.0.0}"
     PORT="${PORT:-8000}"
+
+    # Mata processo uvicorn que já esteja ocupando a porta
+    existing_pid=$(lsof -ti tcp:"$PORT" 2>/dev/null | head -1 || true)
+    if [[ -n "$existing_pid" ]]; then
+      echo "[pdf-translate] Porta ${PORT} em uso (PID ${existing_pid}). Encerrando processo anterior..."
+      kill "$existing_pid" 2>/dev/null || true
+      # Aguarda até 3 s para liberar a porta
+      waited=0
+      while lsof -ti tcp:"$PORT" &>/dev/null && [[ $waited -lt 3 ]]; do
+        sleep 1
+        waited=$((waited + 1))
+      done
+    fi
+
     echo "[pdf-translate] Iniciando servidor em http://${HOST}:${PORT}"
     exec uv run uvicorn app:app --host "$HOST" --port "$PORT" --reload
     ;;
