@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import pty
+import signal
 import uuid
 from pathlib import Path
 from typing import Annotated, Optional
@@ -139,6 +140,7 @@ async def stream_output(job_id: str):
                 stderr=slave_fd,
                 stdin=slave_fd,
                 env=full_env,
+                preexec_fn=os.setpgrp,  # grupo de processos isolado para SIGSTOP/SIGCONT
             )
         except FileNotFoundError:
             os.close(slave_fd)
@@ -149,7 +151,8 @@ async def stream_output(job_id: str):
         except Exception as exc:
             os.close(slave_fd)
             os.close(master_fd)
-            yield f"data: {json.dumps({'line': f'Erro inesperado: {exc}\n', 'done': True, 'returncode': -1})}\n\n"
+            err_line = f"Erro inesperado: {exc}\n"
+            yield f"data: {json.dumps({'line': err_line, 'done': True, 'returncode': -1})}\n\n"
             return
 
         os.close(slave_fd)  # fecha o lado escravo no processo pai
@@ -181,11 +184,11 @@ async def stream_output(job_id: str):
                 os.close(master_fd)
             except OSError:
                 pass
-            # encerra o processo se o cliente SSE desconectar
+            # encerra o processo (e filhos) se o cliente SSE desconectar
             if process.returncode is None:
                 try:
-                    process.terminate()
-                except ProcessLookupError:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except (ProcessLookupError, OSError):
                     pass
 
         await process.wait()
@@ -214,10 +217,42 @@ async def cancel_job(job_id: str):
     process = job.get("process")
     if process and process.returncode is None:
         try:
-            process.terminate()
-        except ProcessLookupError:
+            os.killpg(process.pid, signal.SIGTERM)
+        except (ProcessLookupError, OSError):
             pass
         return {"ok": True}
+    return {"ok": False, "reason": "Processo não está em execução"}
+
+
+@app.post("/pause/{job_id}")
+async def pause_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        return {"ok": False, "reason": "Job não encontrado"}
+    process = job.get("process")
+    if process and process.returncode is None:
+        try:
+            os.killpg(process.pid, signal.SIGSTOP)
+            job["paused"] = True
+            return {"ok": True}
+        except (ProcessLookupError, OSError) as e:
+            return {"ok": False, "reason": str(e)}
+    return {"ok": False, "reason": "Processo não está em execução"}
+
+
+@app.post("/resume/{job_id}")
+async def resume_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        return {"ok": False, "reason": "Job não encontrado"}
+    process = job.get("process")
+    if process and process.returncode is None:
+        try:
+            os.killpg(process.pid, signal.SIGCONT)
+            job["paused"] = False
+            return {"ok": True}
+        except (ProcessLookupError, OSError) as e:
+            return {"ok": False, "reason": str(e)}
     return {"ok": False, "reason": "Processo não está em execução"}
 
 

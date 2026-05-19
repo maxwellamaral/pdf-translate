@@ -179,6 +179,13 @@
             </svg>
             <span>Cancelar</span>
           </button>
+          <button type="button" id="pause-btn" style="display:none"
+                  class="w-full bg-yellow-700 hover:bg-yellow-600 active:scale-95 text-white font-medium rounded-xl px-4 py-3 transition-all flex items-center justify-center gap-2">
+            <svg id="pause-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path id="pause-path" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6"/>
+            </svg>
+            <span id="pause-text">Pausar</span>
+          </button>
 
         </form>
       </div>
@@ -244,6 +251,7 @@
     let currentEvtSource = null;
     let currentJobId = null;
     let logLines = [];
+    let isPaused = false;
 
     const ANSI_RE = /\x1b\[[\d;]*[A-Za-z]|\x1b[()][AB012]/g;
 
@@ -261,7 +269,9 @@
     function resetUI() {
       document.getElementById('submit-btn').disabled = false;
       document.getElementById('cancel-btn').style.display = 'none';
+      document.getElementById('pause-btn').style.display = 'none';
       document.getElementById('btn-text').textContent = 'Traduzir';
+      isPaused = false;
     }
 
     function showDownloads(files, jobId) {
@@ -346,6 +356,10 @@
       document.getElementById('download-links').innerHTML = '';
       submitBtn.disabled = true;
       cancelBtn.style.display = '';
+      document.getElementById('pause-btn').style.display = '';
+      document.getElementById('pause-text').textContent = 'Pausar';
+      document.getElementById('pause-path').setAttribute('d', 'M10 9v6m4-6v6');
+      isPaused = false;
       btnText.textContent = 'Traduzindo...';
       statusBadge.innerHTML = '<span class="text-yellow-400 animate-pulse">● em andamento</span>';
 
@@ -447,6 +461,25 @@
         '<span class="text-yellow-400">⦸ cancelado</span>';
       term.write('\r\n\x1b[33m⦸ Tradução cancelada pelo usuário.\x1b[0m');
       resetUI();
+    });
+
+    document.getElementById('pause-btn').addEventListener('click', async () => {
+      if (!currentJobId) return;
+      if (!isPaused) {
+        try { await fetch(`/pause/${currentJobId}`, { method: 'POST' }); } catch (_) {}
+        isPaused = true;
+        document.getElementById('pause-text').textContent = 'Retomar';
+        document.getElementById('pause-path').setAttribute('d', 'M5 3l14 9-14 9V3z');
+        document.getElementById('status-badge').innerHTML =
+          '<span class="text-yellow-400">⏸ pausado</span>';
+      } else {
+        try { await fetch(`/resume/${currentJobId}`, { method: 'POST' }); } catch (_) {}
+        isPaused = false;
+        document.getElementById('pause-text').textContent = 'Pausar';
+        document.getElementById('pause-path').setAttribute('d', 'M10 9v6m4-6v6');
+        document.getElementById('status-badge').innerHTML =
+          '<span class="text-yellow-400 animate-pulse">● em andamento</span>';
+      }
     });
   </script>
 </body>
