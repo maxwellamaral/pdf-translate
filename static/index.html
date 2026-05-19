@@ -472,9 +472,22 @@
               logLines.push(msg.line);
             }
 
-            if (msg.batch_done) {
+            if (msg.batch_start) {
+              if (msg.single_page) {
+                statusBadge.innerHTML =
+                  `<span class="text-yellow-400 animate-pulse">● Processando página ${msg.batch_num}/${msg.batch_total}</span>`;
+              } else {
+                statusBadge.innerHTML =
+                  `<span class="text-yellow-400 animate-pulse">● batch ${msg.batch_num}/${msg.batch_total} (págs. ${msg.page_start}–${msg.page_end})</span>`;
+              }
+            }
+
+            if (msg.pages_start) {
               statusBadge.innerHTML =
-                `<span class="text-yellow-400 animate-pulse">● batch ${msg.batch_num}/${msg.batch_total}</span>`;
+                `<span class="text-yellow-400 animate-pulse">● Processando págs. ${msg.pages}</span>`;
+            }
+
+            if (msg.batch_done) {
               addDownloadFiles(msg.files, currentJobId);
             }
 

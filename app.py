@@ -213,9 +213,17 @@ async def stream_output(job_id: str):
             start_page, end_page = batch_range
 
             if is_batch:
-                label = f"Batch {batch_idx + 1}/{len(batches)}  (págs. {start_page}\u2013{end_page})"
-                header = f"\r\n\x1b[33;1m{'─' * 4} {label} {'─' * 4}\x1b[0m\r\n\r\n"
+                is_single_page = (start_page == end_page)
+                last_page = batches[-1][1]
+                if is_single_page:
+                    label = f"Processando página {start_page}/{last_page}"
+                    hdr_color = "\x1b[36;1m"  # ciano (igual ao modo não-batch)
+                else:
+                    label = f"Batch {batch_idx + 1}/{len(batches)}  (págs. {start_page}\u2013{end_page})"
+                    hdr_color = "\x1b[33;1m"  # amarelo
+                header = f"\r\n{hdr_color}{'─' * 4} {label} {'─' * 4}\x1b[0m\r\n\r\n"
                 yield f"data: {json.dumps({'line': header})}\n\n"
+                yield f"data: {json.dumps({'batch_start': True, 'batch_num': batch_idx + 1, 'batch_total': len(batches), 'page_start': start_page, 'page_end': end_page, 'single_page': is_single_page})}\n\n"
                 batch_cmd = job["cmd"] + ["--pages", f"{start_page}-{end_page}"]
             else:
                 batch_cmd = job["cmd"]
@@ -225,6 +233,7 @@ async def stream_output(job_id: str):
                     label = f"Processando págs. {pages_field}"
                     header = f"\r\n\x1b[36;1m{'─' * 4} {label} {'─' * 4}\x1b[0m\r\n\r\n"
                     yield f"data: {json.dumps({'line': header})}\n\n"
+                    yield f"data: {json.dumps({'pages_start': True, 'pages': pages_field})}\n\n"
 
             # PTY faz isatty()=True no subprocesso → tqdm/rich exibem barras de progresso
             master_fd, slave_fd = pty.openpty()
