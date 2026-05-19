@@ -10,6 +10,11 @@ Interface web para tradução de PDFs acadêmicos com preservação de formataç
 - Terminal interativo em tempo real no navegador (xterm.js com PTY)
 - Botão de cancelamento de tradução em andamento
 - Configuração de range de páginas, número de workers e diretório de saída
+- **Modo batch** — divide o PDF em grupos de N páginas processadas sequencialmente
+  - Indicador de progresso por página no status badge (`● Processando página 3/45`) quando `batch_size = 1`
+  - Indicador por faixa (`● batch 2/6 (págs. 11–20)`) quando `batch_size > 1`
+  - Cada batch gera arquivos de saída individuais disponíveis para download progressivo
+- **Download em lote (ZIP)** — botão *Baixar todos (ZIP)* compacta todos os arquivos gerados em modo flat; o progresso da compactação é exibido no terminal
 - **Suporte a Docker** — stack completa via Docker Compose com volumes persistentes
 
 
@@ -20,6 +25,14 @@ Interface web para tradução de PDFs acadêmicos com preservação de formataç
 *Frontend durante a tradução (terminal interativo)*
 
 ![Tradução em andamento](assets/front-02.png)
+
+*Resultado da impressão em modo dual (PDF bilíngue)*
+
+![Tradução bilíngue](assets/front-03.png)
+
+*Resultado da impressão em modo mono (PDF apenas com a tradução)*
+
+![Tradução monolingue](assets/front-04.png)
 
 ---
 
@@ -175,6 +188,23 @@ ollama ps
 - **Workers = 1** é o mais eficiente para Ollama local (evita contenção na GPU)
 - **`--no-auto-extract-glossary`** ativado reduz o tempo em ~30%
 - Artigos de 13 páginas em duas colunas levam aproximadamente 4–8 minutos com uma RTX 4060
+- **Batch size = 1** habilita indicadores de progresso por página individual (`● Processando página X/Y`) e permite retomar um processamento parcial baixando cada página separadamente
+
+---
+
+## API HTTP (backend)
+
+| Método   | Rota                          | Descrição                                                      |
+|----------|-------------------------------|----------------------------------------------------------------|
+| `POST`   | `/translate`                  | Inicia um job de tradução; retorna `job_id`                    |
+| `GET`    | `/stream/{job_id}`            | SSE — transmite saída do terminal em tempo real                |
+| `POST`   | `/cancel/{job_id}`            | Cancela o processo em execução (SIGTERM)                       |
+| `POST`   | `/pause/{job_id}`             | Pausa o processo (SIGSTOP)                                     |
+| `POST`   | `/resume/{job_id}`            | Retoma o processo pausado (SIGCONT)                            |
+| `DELETE` | `/job/{job_id}`               | Remove os arquivos gerados e o job do registro                 |
+| `GET`    | `/download/{job_id}/{file}`   | Download de um PDF traduzido individual                        |
+| `GET`    | `/zip/stream/{job_id}`        | SSE — cria ZIP flat com todos os arquivos e transmite progresso |
+| `GET`    | `/zip/download/{job_id}`      | Download do ZIP criado via `/zip/stream`                       |
 
 ---
 
@@ -182,7 +212,7 @@ ollama ps
 
 ```
 pdf-translate/
-├── app.py              # Backend FastAPI (SSE, PTY, upload, download)
+├── app.py              # Backend FastAPI (SSE, PTY, upload, download, zip)
 ├── static/
 │   └── index.html      # Interface web (Tailwind CSS + xterm.js)
 ├── Dockerfile          # Imagem Docker (python:3.12-slim + pdf2zh-next)
@@ -197,7 +227,7 @@ pdf-translate/
 
 ## Licença
 
-Copyright © 2024 **Maxwell Anderson Ielpo do Amaral**
+Copyright © 2026 **Maxwell Anderson Ielpo do Amaral**
 
 Este software é de livre uso, modificação e distribuição, desde que o autor original seja referenciado em qualquer trabalho derivado, publicação ou redistribuição.
 
@@ -215,7 +245,7 @@ Se você utilizar este software em pesquisa acadêmica, por favor cite:
 @software{amaral2024pdftranslate,
   author       = {Amaral, Maxwell Anderson Ielpo do},
   title        = {{PDF Translate}: Interface web para tradução de PDFs acadêmicos com pdf2zh-next},
-  year         = {2024},
+  year         = {2026},
   url          = {https://github.com/maxwellamaral/pdf-translate},
   note         = {Motor de tradução: pdf2zh-next (PDFMathTranslate). Modelos locais via Ollama.},
   license      = {Livre uso com atribuição}
