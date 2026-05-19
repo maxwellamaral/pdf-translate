@@ -12,6 +12,15 @@ Interface web para tradução de PDFs acadêmicos com preservação de formataç
 - Configuração de range de páginas, número de workers e diretório de saída
 - **Suporte a Docker** — stack completa via Docker Compose com volumes persistentes
 
+
+*Frontend inicial*
+
+![Frontend inicial](assets/front-01.png)
+
+*Frontend durante a tradução (terminal interativo)*
+
+![Tradução em andamento](assets/front-02.png)
+
 ---
 
 ## Requisitos
