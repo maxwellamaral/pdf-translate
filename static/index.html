@@ -234,7 +234,18 @@
     <!-- Downloads -->
     <div id="downloads" class="hidden mt-4">
       <div class="bg-gray-900 rounded-2xl p-5">
-        <p class="text-sm font-medium text-gray-300 mb-3">Arquivos gerados</p>
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-sm font-medium text-gray-300">Arquivos gerados</p>
+          <button id="download-all-btn"
+                  class="hidden inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-all"
+                  onclick="downloadAll()">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            Baixar todos (ZIP)
+          </button>
+        </div>
         <div id="download-links" class="flex gap-3 flex-wrap"></div>
       </div>
     </div>
@@ -312,17 +323,70 @@
       isPaused = false;
     }
 
+    function _showDownloadAllBtn() {
+      const btn = document.getElementById('download-all-btn');
+      btn.classList.remove('hidden');
+      // Restaura o label caso tenha sido alterado
+      if (btn.disabled) return;
+      btn.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+      </svg> Baixar todos (ZIP)`;
+    }
+
     function showDownloads(files, jobId) {
       const links = document.getElementById('download-links');
       links.innerHTML = '';
       files.forEach(filename => _appendDownloadLink(links, filename, jobId));
       document.getElementById('downloads').classList.remove('hidden');
+      _showDownloadAllBtn();
     }
 
     function addDownloadFiles(files, jobId) {
       const links = document.getElementById('download-links');
       files.forEach(filename => _appendDownloadLink(links, filename, jobId));
       document.getElementById('downloads').classList.remove('hidden');
+      _showDownloadAllBtn();
+    }
+
+    function downloadAll() {
+      if (!currentJobId) return;
+      const btn = document.getElementById('download-all-btn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Compactando...';
+
+      const es = new EventSource(`/zip/stream/${currentJobId}`);
+      es.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+
+        if (msg.line) {
+          term.write(msg.line);
+          logLines.push(msg.line);
+        }
+
+        if (msg.zip_ready) {
+          es.close();
+          const a = document.createElement('a');
+          a.href = `/zip/download/${currentJobId}`;
+          a.download = msg.filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          btn.disabled = false;
+          _showDownloadAllBtn();
+        }
+
+        if (msg.zip_error || msg.error) {
+          es.close();
+          btn.disabled = false;
+          btn.textContent = '✗ Erro ao compactar';
+        }
+      };
+      es.onerror = () => {
+        es.close();
+        btn.disabled = false;
+        btn.textContent = '✗ Erro de conexão';
+      };
     }
 
     function _appendDownloadLink(container, filename, jobId) {
@@ -440,6 +504,7 @@
         document.getElementById('download-log-btn').style.display = 'none';
         document.getElementById('downloads').classList.add('hidden');
         document.getElementById('download-links').innerHTML = '';
+        document.getElementById('download-all-btn').classList.add('hidden');
         submitBtn.disabled = true;
         cancelBtn.style.display = '';
         document.getElementById('pause-btn').style.display = '';

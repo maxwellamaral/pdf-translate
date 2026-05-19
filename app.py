@@ -4,6 +4,7 @@ import os
 import pty
 import signal
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -454,6 +455,12 @@ async def delete_job(job_id: str):
             deleted.append(filename)
         except OSError as e:
             errors.append(f"{filename}: {e}")
+    # Remove o arquivo ZIP se existir
+    zip_path_str = job.get("zip_path")
+    if zip_path_str:
+        zip_path = Path(zip_path_str)
+        if zip_path.parent.resolve() == out_dir and zip_path.suffix == ".zip":
+            zip_path.unlink(missing_ok=True)
     return {"ok": True, "deleted": deleted, "errors": errors}
 
 
@@ -476,3 +483,71 @@ async def download_file(job_id: str, filename: str):
     if not file_path.exists():
         return {"error": "Arquivo não encontrado"}
     return FileResponse(path=file_path, filename=safe_name, media_type="application/pdf")
+
+
+@app.get("/zip/stream/{job_id}")
+async def zip_stream(job_id: str):
+    """Cria um ZIP flat com todos os arquivos gerados, emitindo progresso via SSE."""
+    job = jobs.get(job_id)
+
+    async def generate():
+        if not job:
+            yield f"data: {json.dumps({'zip_error': 'Job não encontrado'})}\n\n"
+            return
+
+        output_files: list[str] = job.get("output_files", [])
+        if not output_files:
+            yield f"data: {json.dumps({'line': '\r\n\x1b[31mNenhum arquivo gerado para compactar.\x1b[0m\r\n'})}\n\n"
+            yield f"data: {json.dumps({'zip_error': 'Sem arquivos'})}\n\n"
+            return
+
+        out_dir = Path(job.get("output_dir", str(UPLOAD_DIR))).resolve()
+        zip_filename = f"traducao_{job_id[:8]}.zip"
+        zip_path = out_dir / zip_filename
+
+        yield f"data: {json.dumps({'line': '\r\n\x1b[36;1m──── Compactando arquivos ────\x1b[0m\r\n\r\n'})}\n\n"
+
+        added = 0
+        loop = asyncio.get_event_loop()
+        try:
+            zf = zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED)
+            for file_str in output_files:
+                safe_name = Path(file_str).name
+                file_path = (out_dir / safe_name).resolve()
+                try:
+                    file_path.relative_to(out_dir)
+                except ValueError:
+                    continue
+                if not file_path.exists():
+                    continue
+                yield f"data: {json.dumps({'line': f'  \x1b[90m+ {safe_name}\x1b[0m\r\n'})}\n\n"
+                await loop.run_in_executor(None, zf.write, file_path, safe_name)
+                added += 1
+            await loop.run_in_executor(None, zf.close)
+        except Exception as exc:
+            yield f"data: {json.dumps({'line': f'\r\n\x1b[31mErro: {exc}\x1b[0m\r\n'})}\n\n"
+            yield f"data: {json.dumps({'zip_error': str(exc)})}\n\n"
+            return
+
+        size_mb = zip_path.stat().st_size / (1024 * 1024)
+        yield f"data: {json.dumps({'line': f'\r\n\x1b[32;1m\u2713 ZIP criado com {added} arquivo(s) ({size_mb:.1f}\u00a0MB)\x1b[0m\r\n'})}\n\n"
+        job["zip_path"] = str(zip_path)
+        yield f"data: {json.dumps({'zip_ready': True, 'filename': zip_filename})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/zip/download/{job_id}")
+async def zip_download(job_id: str):
+    """Retorna o arquivo ZIP previamente criado para o job."""
+    from fastapi import HTTPException
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado")
+    zip_path_str = job.get("zip_path")
+    if not zip_path_str:
+        raise HTTPException(status_code=404, detail="ZIP ainda não criado — use /zip/stream/{job_id} primeiro")
+    zip_path = Path(zip_path_str)
+    if not zip_path.exists():
+        raise HTTPException(status_code=404, detail="Arquivo ZIP não encontrado no servidor")
+    return FileResponse(path=zip_path, filename=zip_path.name, media_type="application/zip")
