@@ -16,9 +16,8 @@ uv.lock
 # PDFs de upload temporários
 /tmp/pdf2zh_uploads/
 
-# Arquivos de saída do pdf2zh (traduzidos)
-*-mono.pdf
-*-dual.pdf
+# Arquivos PDF (fontes e saídas do pdf2zh)
+*.pdf
 
 # Configuração local e segredos
 .env
