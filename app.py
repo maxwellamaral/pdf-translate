@@ -87,9 +87,10 @@ async def translate(
     if model_flag and model_clean:
         cmd += [model_flag, model_clean]
 
-    # Ollama host
-    if service == "ollama" and ollama_host.strip():
-        cmd += ["--ollama-host", ollama_host.strip()]
+    # Ollama host — usa o campo do form, ou cai no OLLAMA_HOST do ambiente (injetado no Docker)
+    effective_ollama_host = ollama_host.strip() or os.environ.get("OLLAMA_HOST", "")
+    if service == "ollama" and effective_ollama_host:
+        cmd += ["--ollama-host", effective_ollama_host]
 
     # Pages range
     if pages.strip():

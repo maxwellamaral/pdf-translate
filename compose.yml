@@ -1,0 +1,31 @@
+name: pdf-translate
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pdf-translate:latest
+    container_name: pdf-translate-app
+    # Porta aleatória no host — descoberta com: docker compose port app 8000
+    ports:
+      - "127.0.0.1::8000"
+    volumes:
+      # Persiste uploads e PDFs traduzidos localmente
+      - ./data/uploads:/tmp/pdf2zh_uploads
+      # Persiste fontes/modelos do babeldoc entre reinicializações
+      - babeldoc-cache:/root/.cache/babeldoc
+    environment:
+      # Docker Desktop provê host.docker.internal automaticamente (não precisa extra_hosts).
+      # O WSL2 faz port-forward de Ollama para o host Windows, que é acessível via host.docker.internal.
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  babeldoc-cache:

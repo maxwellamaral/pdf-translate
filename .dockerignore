@@ -1,0 +1,23 @@
+# Dependências e caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Dados de runtime (não devem ir para a imagem)
+data/
+/tmp/
+
+# PDFs de teste/trabalho
+*.pdf
+
+# Configs locais
+.env
+.vscode/
+
+# Logs
+*.log
+
+# Git
+.git/
+.gitignore
