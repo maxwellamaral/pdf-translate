@@ -161,6 +161,19 @@
                 <input type="checkbox" name="no_auto_extract_glossary" checked class="w-4 h-4 rounded bg-gray-800 border-gray-600 accent-blue-500" />
                 <span class="text-xs text-gray-400 group-hover:text-gray-200 transition-colors">Desativar extração automática de glossário <code class="text-gray-500">(--no-auto-extract-glossary)</code></span>
               </label>
+              <!-- Modo batch -->
+              <div class="border-t border-gray-800 pt-3">
+                <label class="flex items-center gap-2 cursor-pointer group mb-2">
+                  <input type="checkbox" id="batch-mode" name="batch_mode" class="w-4 h-4 rounded bg-gray-800 border-gray-600 accent-blue-500" onchange="onBatchModeChange()" />
+                  <span class="text-xs text-gray-400 group-hover:text-gray-200 transition-colors">Traduzir em batches de páginas</span>
+                </label>
+                <div id="batch-size-group" style="display:none">
+                  <label class="block text-xs text-gray-500 mb-1">Páginas por batch</label>
+                  <input type="number" id="batch-size" name="batch_size" value="10" min="1" max="500"
+                         class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500" />
+                  <p class="text-xs text-gray-600 mt-1">Cada batch gera um PDF separado com sufixo <code>batch01</code>, <code>batch02</code>…</p>
+                </div>
+              </div>
             </div>
           </details>
 
@@ -228,6 +241,19 @@
 
   </div>
 
+  <!-- Modal: confirmar exclusão de arquivos anteriores -->
+  <div id="confirm-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+      <h3 class="text-white font-semibold text-lg mb-2">Novo processamento</h3>
+      <p class="text-gray-400 text-sm mb-6">Existem arquivos do processamento anterior no servidor. Deseja excluí-los antes de iniciar?</p>
+      <div class="flex flex-col gap-2">
+        <button id="modal-delete-btn" class="bg-red-700 hover:bg-red-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Excluir arquivos e iniciar</button>
+        <button id="modal-keep-btn" class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Manter arquivos e iniciar</button>
+        <button id="modal-cancel-btn" class="text-gray-500 hover:text-gray-300 text-sm font-medium px-4 py-2 rounded-lg transition-colors">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
   <script>
@@ -266,6 +292,18 @@
       URL.revokeObjectURL(url);
     }
 
+    function showConfirmModal(onDelete, onKeep) {
+      const modal = document.getElementById('confirm-modal');
+      modal.classList.remove('hidden');
+      document.getElementById('modal-delete-btn').onclick = () => { hideConfirmModal(); onDelete(); };
+      document.getElementById('modal-keep-btn').onclick  = () => { hideConfirmModal(); onKeep(); };
+      document.getElementById('modal-cancel-btn').onclick = () => { hideConfirmModal(); };
+    }
+
+    function hideConfirmModal() {
+      document.getElementById('confirm-modal').classList.add('hidden');
+    }
+
     function resetUI() {
       document.getElementById('submit-btn').disabled = false;
       document.getElementById('cancel-btn').style.display = 'none';
@@ -277,17 +315,32 @@
     function showDownloads(files, jobId) {
       const links = document.getElementById('download-links');
       links.innerHTML = '';
-      files.forEach(filename => {
-        const a = document.createElement('a');
-        a.href = `/download/${jobId}/${encodeURIComponent(filename)}`;
-        a.download = filename;
-        a.className = 'inline-flex items-center gap-2 bg-blue-700 hover:bg-blue-600 active:scale-95 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all';
-        a.textContent = filename.includes('-mono.') ? '⬇️ Mono'
-                       : filename.includes('-dual.') ? '⬇️ Dual (bilíngue)'
-                       : '⬇️ ' + filename;
-        links.appendChild(a);
-      });
+      files.forEach(filename => _appendDownloadLink(links, filename, jobId));
       document.getElementById('downloads').classList.remove('hidden');
+    }
+
+    function addDownloadFiles(files, jobId) {
+      const links = document.getElementById('download-links');
+      files.forEach(filename => _appendDownloadLink(links, filename, jobId));
+      document.getElementById('downloads').classList.remove('hidden');
+    }
+
+    function _appendDownloadLink(container, filename, jobId) {
+      // evita duplicatas
+      if (container.querySelector(`[data-file="${filename}"]`)) return;
+      const a = document.createElement('a');
+      a.href = `/download/${jobId}/${encodeURIComponent(filename)}`;
+      a.download = filename;
+      a.dataset.file = filename;
+      a.className = 'inline-flex items-center gap-2 bg-blue-700 hover:bg-blue-600 active:scale-95 text-white text-sm font-medium px-4 py-2 rounded-lg transition-all';
+      const label = filename.includes('.batch')
+        ? filename.replace(/^.*\.(batch\d+)\.(mono|dual)\.pdf$/, (_, b, t) =>
+            `\u2B07\uFE0F ${b} ${t === 'mono' ? 'Mono' : 'Dual'}`)
+        : filename.includes('.mono.') ? '\u2B07\uFE0F Mono'
+        : filename.includes('.dual.') ? '\u2B07\uFE0F Dual (bil\u00edngue)'
+        : '\u2B07\uFE0F ' + filename;
+      a.textContent = label;
+      container.appendChild(a);
     }
 
     // ── Serviços LLM ─────────────────────────────────────────────────────────
@@ -304,6 +357,11 @@
       grok:             'grok-2-1212',
       openaicompatible: '',
     };
+
+    function onBatchModeChange() {
+      const on = document.getElementById('batch-mode').checked;
+      document.getElementById('batch-size-group').style.display = on ? '' : 'none';
+    }
 
     function onServiceChange() {
       const service = document.getElementById('service').value;
@@ -343,107 +401,132 @@
     document.getElementById('form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const form = e.target;
-      const submitBtn = document.getElementById('submit-btn');
-      const cancelBtn = document.getElementById('cancel-btn');
-      const btnText = document.getElementById('btn-text');
-      const statusBadge = document.getElementById('status-badge');
 
-      term.reset();
-      fitAddon.fit();
-      logLines = [];
-      document.getElementById('download-log-btn').style.display = 'none';
-      document.getElementById('downloads').classList.add('hidden');
-      document.getElementById('download-links').innerHTML = '';
-      submitBtn.disabled = true;
-      cancelBtn.style.display = '';
-      document.getElementById('pause-btn').style.display = '';
-      document.getElementById('pause-text').textContent = 'Pausar';
-      document.getElementById('pause-path').setAttribute('d', 'M10 9v6m4-6v6');
-      isPaused = false;
-      btnText.textContent = 'Traduzindo...';
-      statusBadge.innerHTML = '<span class="text-yellow-400 animate-pulse">● em andamento</span>';
-
+      // Monta formData antes de qualquer confirmação
       const formData = new FormData();
       const fileInput = document.getElementById('file-input');
-      const filePath = document.getElementById('file-path').value.trim();
-
+      const filePath  = document.getElementById('file-path').value.trim();
       if (fileInput.files[0]) {
         formData.append('file', fileInput.files[0]);
       } else {
         formData.append('file_path', filePath);
       }
-
       const getVal = (name) => {
         const el = form.elements[name];
         if (!el) return '';
         return el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : (el.value || '');
       };
-
       ['lang_in','lang_out','service','model','pages','workers','output_dir','ollama_host','no_auto_extract_glossary']
         .forEach(f => formData.append(f, getVal(f)));
+      const batchMode = document.getElementById('batch-mode').checked;
+      formData.append('batch_size', batchMode ? (document.getElementById('batch-size').value || '10') : '0');
 
-      try {
-        const resp = await fetch('/translate', { method: 'POST', body: formData });
-        const data = await resp.json();
+      const prevJobId = currentJobId;
+      const downloadsHaveItems = document.getElementById('download-links').children.length > 0;
 
-        if (data.error) {
-          term.write('\x1b[31mErro: ' + data.error + '\x1b[0m');
-          statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
-          resetUI();
-          return;
+      async function doStart(deleteFiles) {
+        if (deleteFiles && prevJobId) {
+          await fetch(`/job/${prevJobId}`, { method: 'DELETE' }).catch(() => {});
         }
 
-        currentJobId = data.job_id;
-        term.write('\x1b[90m$ ' + data.cmd + '\x1b[0m\r\n\r\n');
+        const submitBtn  = document.getElementById('submit-btn');
+        const cancelBtn  = document.getElementById('cancel-btn');
+        const btnText    = document.getElementById('btn-text');
+        const statusBadge = document.getElementById('status-badge');
 
-        currentEvtSource = new EventSource(`/stream/${data.job_id}`);
-        currentEvtSource.onmessage = (ev) => {
-          const msg = JSON.parse(ev.data);
-
-          if (msg.line) {
-            term.write(msg.line);
-            logLines.push(msg.line);
-          }
-
-          if (msg.done) {
-            currentEvtSource.close();
-            currentEvtSource = null;
-            if (msg.returncode === 0) {
-              statusBadge.innerHTML = '<span class="text-green-400">✓ concluído</span>';
-              term.write('\r\n\x1b[32;1m✓ Tradução concluída!\x1b[0m');
-              if (msg.files && msg.files.length > 0) {
-                showDownloads(msg.files, currentJobId);
-              }
-            } else {
-              statusBadge.innerHTML = `<span class="text-red-400">✗ erro (${msg.returncode})</span>`;
-              term.write(`\r\n\x1b[31m✗ Encerrado com erro (código ${msg.returncode})\x1b[0m`);
-            }
-            document.getElementById('download-log-btn').style.display = '';
-            resetUI();
-          }
-
-          if (msg.error) {
-            currentEvtSource.close();
-            currentEvtSource = null;
-            term.write('\r\n\x1b[31m' + msg.error + '\x1b[0m');
-            document.getElementById('download-log-btn').style.display = '';
-            resetUI();
-          }
-        };
-
-        currentEvtSource.onerror = () => {
-          if (!currentEvtSource) return;
-          currentEvtSource.close();
-          currentEvtSource = null;
-          statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
-          term.write('\r\n\x1b[31m✗ Conexão perdida. Verifique se o servidor está rodando e se pdf2zh está instalado no PATH.\x1b[0m');
-          resetUI();
-        };
-
-      } catch (err) {
         term.reset();
-        term.write('\x1b[31mErro de rede: ' + err.message + '\x1b[0m');
-        resetUI();
+        fitAddon.fit();
+        logLines = [];
+        document.getElementById('download-log-btn').style.display = 'none';
+        document.getElementById('downloads').classList.add('hidden');
+        document.getElementById('download-links').innerHTML = '';
+        submitBtn.disabled = true;
+        cancelBtn.style.display = '';
+        document.getElementById('pause-btn').style.display = '';
+        document.getElementById('pause-text').textContent = 'Pausar';
+        document.getElementById('pause-path').setAttribute('d', 'M10 9v6m4-6v6');
+        isPaused = false;
+        btnText.textContent = 'Traduzindo...';
+        statusBadge.innerHTML = '<span class="text-yellow-400 animate-pulse">● em andamento</span>';
+
+        try {
+          const resp = await fetch('/translate', { method: 'POST', body: formData });
+          const data = await resp.json();
+
+          if (data.error) {
+            term.write('\x1b[31mErro: ' + data.error + '\x1b[0m');
+            statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
+            resetUI();
+            return;
+          }
+
+          currentJobId = data.job_id;
+          term.write('\x1b[90m$ ' + data.cmd + '\x1b[0m\r\n\r\n');
+
+          currentEvtSource = new EventSource(`/stream/${data.job_id}`);
+          currentEvtSource.onmessage = (ev) => {
+            const msg = JSON.parse(ev.data);
+
+            if (msg.line) {
+              term.write(msg.line);
+              logLines.push(msg.line);
+            }
+
+            if (msg.batch_done) {
+              statusBadge.innerHTML =
+                `<span class="text-yellow-400 animate-pulse">● batch ${msg.batch_num}/${msg.batch_total}</span>`;
+              addDownloadFiles(msg.files, currentJobId);
+            }
+
+            if (msg.done) {
+              currentEvtSource.close();
+              currentEvtSource = null;
+              if (msg.returncode === 0) {
+                statusBadge.innerHTML = '<span class="text-green-400">✓ concluído</span>';
+                term.write('\r\n\x1b[32;1m✓ Tradução concluída!\x1b[0m');
+                if (msg.files && msg.files.length > 0) {
+                  showDownloads(msg.files, currentJobId);
+                }
+              } else {
+                statusBadge.innerHTML = `<span class="text-red-400">✗ erro (${msg.returncode})</span>`;
+                term.write(`\r\n\x1b[31m✗ Encerrado com erro (código ${msg.returncode})\x1b[0m`);
+              }
+              document.getElementById('download-log-btn').style.display = '';
+              resetUI();
+            }
+
+            if (msg.error) {
+              currentEvtSource.close();
+              currentEvtSource = null;
+              term.write('\r\n\x1b[31m' + msg.error + '\x1b[0m');
+              document.getElementById('download-log-btn').style.display = '';
+              resetUI();
+            }
+          };
+
+          currentEvtSource.onerror = () => {
+            if (!currentEvtSource) return;
+            currentEvtSource.close();
+            currentEvtSource = null;
+            statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
+            term.write('\r\n\x1b[31m✗ Conexão perdida. Verifique se o servidor está rodando e se pdf2zh está instalado no PATH.\x1b[0m');
+            resetUI();
+          };
+
+        } catch (err) {
+          term.reset();
+          term.write('\x1b[31mErro de rede: ' + err.message + '\x1b[0m');
+          resetUI();
+        }
+      }
+
+      if (downloadsHaveItems && prevJobId) {
+        showConfirmModal(
+          () => doStart(true),
+          () => doStart(false)
+        );
+      } else {
+        await doStart(false);
       }
     });
 

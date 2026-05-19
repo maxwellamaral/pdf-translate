@@ -7,6 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Optional
 
+from pypdf import PdfReader, PdfWriter
+
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +46,56 @@ SERVICE_MODEL_FLAGS: dict[str, str] = {
 }
 
 
+async def _get_pdf_page_count(pdf_path: str) -> int:
+    """Retorna o número de páginas do PDF via pdfinfo (poppler-utils)."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "pdfinfo", pdf_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        for line in stdout.decode(errors="replace").splitlines():
+            if line.lower().startswith("pages:"):
+                return int(line.split(":", 1)[1].strip())
+    except Exception:
+        pass
+    return 0
+
+
+def _parse_page_range(pages_str: str, total_pages: int) -> tuple[int, int]:
+    """Converte '3-12' → (3, 12); '' → (1, total_pages); '5' → (5, 5).
+    Para padrões complexos (vírgulas etc.) retorna (1, total_pages)."""
+    s = pages_str.strip()
+    if not s:
+        return (1, total_pages)
+    if "-" in s and "," not in s:
+        parts = s.split("-", 1)
+        try:
+            start = int(parts[0].strip())
+            end = int(parts[1].strip())
+            return (max(1, start), min(end, total_pages))
+        except ValueError:
+            pass
+    try:
+        p = int(s)
+        return (max(1, p), min(p, total_pages))
+    except ValueError:
+        pass
+    return (1, total_pages)
+
+
+def _extract_pages_sync(src: Path, dst: Path, start_page: int, end_page: int) -> None:
+    """Extrai páginas start_page..end_page (1-indexed) de src e grava em dst."""
+    reader = PdfReader(str(src))
+    writer = PdfWriter()
+    for i in range(start_page - 1, end_page):
+        if i < len(reader.pages):
+            writer.add_page(reader.pages[i])
+    with open(dst, "wb") as f:
+        writer.write(f)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return Path("static/index.html").read_text()
@@ -62,6 +114,7 @@ async def translate(
     output_dir: Annotated[str, Form()] = "",
     ollama_host: Annotated[str, Form()] = "",
     no_auto_extract_glossary: Annotated[str, Form()] = "true",
+    batch_size: Annotated[str, Form()] = "0",
 ):
     # Resolve file path
     actual_path = file_path.strip()
@@ -73,6 +126,9 @@ async def translate(
 
     if not actual_path:
         return {"error": "Nenhum arquivo fornecido"}
+
+    # Batch config
+    batch_n = max(0, int(batch_size.strip() or "0"))
 
     # Build pdf2zh-next (v2) command
     cmd = ["pdf2zh", actual_path, "--lang-in", lang_in, "--lang-out", lang_out]
@@ -93,8 +149,8 @@ async def translate(
     if service == "ollama" and effective_ollama_host:
         cmd += ["--ollama-host", effective_ollama_host]
 
-    # Pages range
-    if pages.strip():
+    # Pages range — ignorado em modo batch (cada batch adiciona o próprio --pages)
+    if batch_n <= 0 and pages.strip():
         cmd += ["--pages", pages.strip()]
 
     # Workers (parallel requests to translation service)
@@ -108,15 +164,32 @@ async def translate(
     # Skip automatic glossary extraction (speeds up translation significantly)
     if no_auto_extract_glossary.lower() == "true":
         cmd.append("--no-auto-extract-glossary")
+
+    # Calcula batches se necessário
+    batches: list[tuple[int, int]] = []
+    if batch_n > 0:
+        total_pages = await _get_pdf_page_count(actual_path)
+        if total_pages <= 0:
+            return {"error": "Não foi possível determinar o número de páginas do PDF. Verifique se o arquivo é válido."}
+        # Respeita o campo "Páginas" como intervalo máximo dos batches
+        range_start, range_end = _parse_page_range(pages.strip(), total_pages)
+        page = range_start
+        while page <= range_end:
+            batches.append((page, min(page + batch_n - 1, range_end)))
+            page += batch_n
+
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
         "cmd": cmd,
         "env": {},
         "input_path": actual_path,
         "output_dir": effective_out_dir,
+        "lang_out": lang_out,
+        "batches": batches,
+        "pages": pages.strip(),
     }
 
-    return {"job_id": job_id, "cmd": " ".join(cmd)}
+    return {"job_id": job_id, "cmd": " ".join(cmd), "batch_total": len(batches)}
 
 
 @app.get("/stream/{job_id}")
@@ -131,76 +204,169 @@ async def stream_output(job_id: str):
     full_env = {**os.environ, **job["env"]}
 
     async def generate():
-        # PTY faz isatty()=True no subprocesso → tqdm/rich exibem barras de progresso
-        master_fd, slave_fd = pty.openpty()
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *job["cmd"],
-                stdout=slave_fd,
-                stderr=slave_fd,
-                stdin=slave_fd,
-                env=full_env,
-                preexec_fn=os.setpgrp,  # grupo de processos isolado para SIGSTOP/SIGCONT
-            )
-        except FileNotFoundError:
-            os.close(slave_fd)
-            os.close(master_fd)
-            msg = "Erro: 'pdf2zh' não encontrado no PATH.\nInstale com: uv tool install --python 3.12 pdf2zh-next\n"
-            yield f"data: {json.dumps({'line': msg, 'done': True, 'returncode': 127})}\n\n"
-            return
-        except Exception as exc:
-            os.close(slave_fd)
-            os.close(master_fd)
-            err_line = f"Erro inesperado: {exc}\n"
-            yield f"data: {json.dumps({'line': err_line, 'done': True, 'returncode': -1})}\n\n"
-            return
+        batches: list[tuple[int, int]] = job.get("batches", [])
+        is_batch = len(batches) > 0
+        runs: list = batches if is_batch else [(None, None)]
+        all_output_files: list[str] = []
 
-        os.close(slave_fd)  # fecha o lado escravo no processo pai
-        jobs[job_id]["process"] = process
+        for batch_idx, batch_range in enumerate(runs):
+            start_page, end_page = batch_range
 
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue = asyncio.Queue()
+            if is_batch:
+                label = f"Batch {batch_idx + 1}/{len(batches)}  (págs. {start_page}\u2013{end_page})"
+                header = f"\r\n\x1b[33;1m{'─' * 4} {label} {'─' * 4}\x1b[0m\r\n\r\n"
+                yield f"data: {json.dumps({'line': header})}\n\n"
+                batch_cmd = job["cmd"] + ["--pages", f"{start_page}-{end_page}"]
+            else:
+                batch_cmd = job["cmd"]
+                # Emite cabeçalho informativo quando há restrição de páginas
+                pages_field = job.get("pages", "").strip()
+                if pages_field:
+                    label = f"Processando págs. {pages_field}"
+                    header = f"\r\n\x1b[36;1m{'─' * 4} {label} {'─' * 4}\x1b[0m\r\n\r\n"
+                    yield f"data: {json.dumps({'line': header})}\n\n"
 
-        def _reader():
+            # PTY faz isatty()=True no subprocesso → tqdm/rich exibem barras de progresso
+            master_fd, slave_fd = pty.openpty()
             try:
-                data = os.read(master_fd, 4096)
-                queue.put_nowait(data if data else None)
-                if not data:
-                    loop.remove_reader(master_fd)
-            except OSError:
-                queue.put_nowait(None)
-                loop.remove_reader(master_fd)
-
-        loop.add_reader(master_fd, _reader)
-        try:
-            while True:
-                chunk = await queue.get()
-                if chunk is None:
-                    break
-                yield f"data: {json.dumps({'line': chunk.decode('utf-8', errors='replace')})}\n\n"
-        finally:
-            loop.remove_reader(master_fd)
-            try:
+                process = await asyncio.create_subprocess_exec(
+                    *batch_cmd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    stdin=slave_fd,
+                    env=full_env,
+                    preexec_fn=os.setpgrp,
+                )
+            except FileNotFoundError:
+                os.close(slave_fd)
                 os.close(master_fd)
-            except OSError:
-                pass
-            # encerra o processo (e filhos) se o cliente SSE desconectar
-            if process.returncode is None:
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    pass
+                msg = "Erro: 'pdf2zh' não encontrado no PATH.\nInstale com: uv tool install --python 3.12 pdf2zh-next\n"
+                yield f"data: {json.dumps({'line': msg, 'done': True, 'returncode': 127})}\n\n"
+                return
+            except Exception as exc:
+                os.close(slave_fd)
+                os.close(master_fd)
+                err_line = f"Erro inesperado: {exc}\n"
+                yield f"data: {json.dumps({'line': err_line, 'done': True, 'returncode': -1})}\n\n"
+                return
 
-        await process.wait()
-        # Detecta arquivos gerados por pdf2zh-next (-mono.pdf e -dual.pdf)
-        output_files: list[str] = []
-        if process.returncode == 0:
+            os.close(slave_fd)
+            jobs[job_id]["process"] = process
+
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue = asyncio.Queue()
+
+            def _reader():
+                try:
+                    data = os.read(master_fd, 4096)
+                    queue.put_nowait(data if data else None)
+                    if not data:
+                        loop.remove_reader(master_fd)
+                except OSError:
+                    queue.put_nowait(None)
+                    loop.remove_reader(master_fd)
+
+            loop.add_reader(master_fd, _reader)
+            try:
+                while True:
+                    chunk = await queue.get()
+                    if chunk is None:
+                        break
+                    yield f"data: {json.dumps({'line': chunk.decode('utf-8', errors='replace')})}\n\n"
+            finally:
+                loop.remove_reader(master_fd)
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+                # encerra o processo (e filhos) se o cliente SSE desconectar
+                if process.returncode is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except (ProcessLookupError, OSError):
+                        pass
+
+            await process.wait()
+
+            if process.returncode != 0:
+                yield f"data: {json.dumps({'done': True, 'returncode': process.returncode, 'files': all_output_files})}\n\n"
+                return
+
+            # Detecta arquivos gerados e renomeia com sufixo de batch
             in_stem = Path(job.get("input_path", "")).stem
             out_dir = Path(job.get("output_dir", str(UPLOAD_DIR)))
-            # pdf2zh-next usa {stem}.{lang_out}.mono.pdf / {stem}.{lang_out}.dual.pdf
-            for pattern in [f"{in_stem}.*.mono.pdf", f"{in_stem}.*.dual.pdf"]:
-                output_files.extend(f.name for f in sorted(out_dir.glob(pattern)))
-        yield f"data: {json.dumps({'done': True, 'returncode': process.returncode, 'files': output_files})}\n\n"
+            batch_files: list[str] = []
+
+            if is_batch:
+                batch_tag = f"batch{batch_idx + 1:02d}"
+                lang_out = job.get("lang_out", "")
+                for suffix in ("mono", "dual"):
+                    src = out_dir / f"{in_stem}.{lang_out}.{suffix}.pdf"
+                    if not src.exists():
+                        # fallback: qualquer arquivo que combine com o padrão
+                        candidates = sorted(out_dir.glob(f"{in_stem}.*.{suffix}.pdf"))
+                        src = candidates[0] if candidates else None  # type: ignore[assignment]
+                    if src and src.exists():
+                        dst = out_dir / f"{in_stem}.{lang_out}.{batch_tag}.{suffix}.pdf"
+                        src.rename(dst)
+                        # Extrai somente as páginas do batch (remove páginas fora do range)
+                        tmp = dst.with_suffix(".tmp.pdf")
+                        try:
+                            await asyncio.to_thread(
+                                _extract_pages_sync, dst, tmp, start_page, end_page
+                            )
+                            tmp.replace(dst)
+                        except Exception as exc:
+                            if tmp.exists():
+                                tmp.unlink(missing_ok=True)
+                            warn = f"Aviso: extração de páginas falhou ({exc})\r\n"
+                            yield f"data: {json.dumps({'line': warn})}\n\n"
+                        batch_files.append(dst.name)
+                all_output_files.extend(batch_files)
+                if batch_files:
+                    yield f"data: {json.dumps({'batch_done': True, 'batch_num': batch_idx + 1, 'batch_total': len(batches), 'files': batch_files})}\n\n"
+            else:
+                for pattern in [f"{in_stem}.*.mono.pdf", f"{in_stem}.*.dual.pdf"]:
+                    batch_files.extend(f.name for f in sorted(out_dir.glob(pattern)))
+                # Extrai apenas as páginas especificadas no campo Pages (modo não-batch)
+                pages_field = job.get("pages", "").strip()
+                extract_range: tuple[int, int] | None = None
+                if pages_field and "," not in pages_field:
+                    if "-" in pages_field:
+                        try:
+                            p0, p1 = pages_field.split("-", 1)
+                            extract_range = (int(p0.strip()), int(p1.strip()))
+                        except ValueError:
+                            pass
+                    else:
+                        try:
+                            p = int(pages_field)
+                            extract_range = (p, p)
+                        except ValueError:
+                            pass
+                if extract_range:
+                    kept: list[str] = []
+                    for fname in batch_files:
+                        fpath = out_dir / fname
+                        if fpath.exists():
+                            tmp = fpath.with_suffix(".tmp.pdf")
+                            try:
+                                await asyncio.to_thread(
+                                    _extract_pages_sync, fpath, tmp,
+                                    extract_range[0], extract_range[1]
+                                )
+                                tmp.replace(fpath)
+                            except Exception as exc:
+                                if tmp.exists():
+                                    tmp.unlink(missing_ok=True)
+                                warn = f"Aviso: extração de páginas falhou ({exc})\r\n"
+                                yield f"data: {json.dumps({'line': warn})}\n\n"
+                        kept.append(fname)
+                    batch_files = kept
+                all_output_files.extend(batch_files)
+
+        jobs[job_id]["output_files"] = all_output_files
+        yield f"data: {json.dumps({'done': True, 'returncode': 0, 'files': all_output_files})}\n\n"
 
     return StreamingResponse(
         generate(),
@@ -254,6 +420,32 @@ async def resume_job(job_id: str):
         except (ProcessLookupError, OSError) as e:
             return {"ok": False, "reason": str(e)}
     return {"ok": False, "reason": "Processo não está em execução"}
+
+
+@app.delete("/job/{job_id}")
+async def delete_job(job_id: str):
+    """Exclui os arquivos gerados por um job e remove o job do registro."""
+    job = jobs.pop(job_id, None)
+    if not job:
+        return {"ok": False, "reason": "Job não encontrado"}
+    out_dir = Path(job.get("output_dir", str(UPLOAD_DIR))).resolve()
+    deleted: list[str] = []
+    errors: list[str] = []
+    for filename in job.get("output_files", []):
+        safe_name = Path(filename).name
+        if safe_name != filename or not safe_name.lower().endswith(".pdf"):
+            continue
+        file_path = (out_dir / safe_name).resolve()
+        try:
+            file_path.relative_to(out_dir)
+        except ValueError:
+            continue
+        try:
+            file_path.unlink(missing_ok=True)
+            deleted.append(filename)
+        except OSError as e:
+            errors.append(f"{filename}: {e}")
+    return {"ok": True, "deleted": deleted, "errors": errors}
 
 
 @app.get("/download/{job_id}/{filename}")
