@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import pty
 import uuid
 from pathlib import Path
 from typing import Annotated, Optional
@@ -124,23 +125,65 @@ async def stream_output(job_id: str):
     full_env = {**os.environ, **job["env"]}
 
     async def generate():
+        # PTY faz isatty()=True no subprocesso → tqdm/rich exibem barras de progresso
+        master_fd, slave_fd = pty.openpty()
         try:
             process = await asyncio.create_subprocess_exec(
                 *job["cmd"],
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                stdin=slave_fd,
                 env=full_env,
             )
-            async for line in process.stdout:
-                yield f"data: {json.dumps({'line': line.decode('utf-8', errors='replace')})}\n\n"
-            await process.wait()
-            yield f"data: {json.dumps({'done': True, 'returncode': process.returncode})}\n\n"
         except FileNotFoundError:
+            os.close(slave_fd)
+            os.close(master_fd)
             msg = "Erro: 'pdf2zh' não encontrado no PATH.\nInstale com: uv tool install --python 3.12 pdf2zh-next\n"
             yield f"data: {json.dumps({'line': msg, 'done': True, 'returncode': 127})}\n\n"
+            return
         except Exception as exc:
-            err_msg = f"Erro inesperado: {exc}\n"
-            yield f"data: {json.dumps({'line': err_msg, 'done': True, 'returncode': -1})}\n\n"
+            os.close(slave_fd)
+            os.close(master_fd)
+            yield f"data: {json.dumps({'line': f'Erro inesperado: {exc}\n', 'done': True, 'returncode': -1})}\n\n"
+            return
+
+        os.close(slave_fd)  # fecha o lado escravo no processo pai
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _reader():
+            try:
+                data = os.read(master_fd, 4096)
+                queue.put_nowait(data if data else None)
+                if not data:
+                    loop.remove_reader(master_fd)
+            except OSError:
+                queue.put_nowait(None)
+                loop.remove_reader(master_fd)
+
+        loop.add_reader(master_fd, _reader)
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield f"data: {json.dumps({'line': chunk.decode('utf-8', errors='replace')})}\n\n"
+        finally:
+            loop.remove_reader(master_fd)
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+            # encerra o processo se o cliente SSE desconectar
+            if process.returncode is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+
+        await process.wait()
+        yield f"data: {json.dumps({'done': True, 'returncode': process.returncode})}\n\n"
 
     return StreamingResponse(
         generate(),

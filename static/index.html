@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PDF Translate</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
     body { font-family: 'Inter', sans-serif; }
@@ -188,17 +189,33 @@
           <div id="status-badge" class="ml-auto text-xs font-mono"></div>
         </div>
         <!-- Output -->
-        <div id="terminal"
-             class="flex-1 p-4 text-xs text-green-400 overflow-y-auto bg-gray-950/60 whitespace-pre-wrap break-all"
-             style="min-height: 460px;">
-          <span class="text-gray-600 italic">Aguardando tradução...</span>
-        </div>
+        <div id="terminal" class="flex-1" style="min-height: 460px; padding: 4px; overflow: hidden;"></div>
       </div>
 
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
   <script>
+    // ── Terminal xterm.js ────────────────────────────────────────────────────
+    const term = new Terminal({
+      convertEol: true,
+      theme: { background: '#030712', foreground: '#4ade80', cursor: '#4ade80' },
+      fontFamily: "'JetBrains Mono', Menlo, 'Courier New', monospace",
+      fontSize: 12,
+      scrollback: 10000,
+      disableStdin: true,
+      cursorBlink: false,
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+    term.write('\x1b[90mAguardando tradução...\x1b[0m');
+    window.addEventListener('resize', () => fitAddon.fit());
+
+    // ── Serviços LLM ─────────────────────────────────────────────────────────
     const LLM_SERVICES = new Set([
       'ollama','openai','deepseek','gemini','groq','grok','openaicompatible',
     ]);
@@ -248,22 +265,15 @@
       }
     }
 
-    // Strip ANSI escape sequences
-    function stripAnsi(str) {
-      return str.replace(/\x1b\[[0-9;]*[mGKJHFABCDsu]/g, '')
-                .replace(/\x1b\[\?[0-9;]*[lh]/g, '')
-                .replace(/\r/g, '');
-    }
-
     document.getElementById('form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const form = e.target;
-      const terminal = document.getElementById('terminal');
       const submitBtn = document.getElementById('submit-btn');
       const btnText = document.getElementById('btn-text');
       const statusBadge = document.getElementById('status-badge');
 
-      terminal.innerHTML = '';
+      term.reset();
+      fitAddon.fit();
       submitBtn.disabled = true;
       btnText.textContent = 'Traduzindo...';
       statusBadge.innerHTML = '<span class="text-yellow-400 animate-pulse">● em andamento</span>';
@@ -292,48 +302,42 @@
         const data = await resp.json();
 
         if (data.error) {
-          terminal.innerHTML = `<span class="text-red-400">Erro: ${data.error}</span>`;
+          term.write('\x1b[31mErro: ' + data.error + '\x1b[0m');
           statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
           submitBtn.disabled = false;
           btnText.textContent = 'Traduzir';
           return;
         }
 
-        // Show the command being run
-        terminal.insertAdjacentHTML('beforeend',
-          `<span class="text-gray-500">$ ${data.cmd}</span>\n\n`);
+        // Exibe o comando executado
+        term.write('\x1b[90m$ ' + data.cmd + '\x1b[0m\r\n\r\n');
 
-        // Stream SSE output
+        // Streaming SSE — xterm.js interpreta ANSI e \r nativamente
         const evtSource = new EventSource(`/stream/${data.job_id}`);
         evtSource.onmessage = (ev) => {
           const msg = JSON.parse(ev.data);
 
           if (msg.line) {
-            terminal.insertAdjacentText('beforeend', stripAnsi(msg.line));
-            terminal.scrollTop = terminal.scrollHeight;
+            term.write(msg.line);
           }
 
           if (msg.done) {
             evtSource.close();
             submitBtn.disabled = false;
             btnText.textContent = 'Traduzir';
-            terminal.scrollTop = terminal.scrollHeight;
 
             if (msg.returncode === 0) {
               statusBadge.innerHTML = '<span class="text-green-400">✓ concluído</span>';
-              terminal.insertAdjacentHTML('beforeend',
-                '\n<span class="text-green-400 font-semibold">✓ Tradução concluída!</span>');
+              term.write('\r\n\x1b[32;1m✓ Tradução concluída!\x1b[0m');
             } else {
               statusBadge.innerHTML = `<span class="text-red-400">✗ erro (${msg.returncode})</span>`;
-              terminal.insertAdjacentHTML('beforeend',
-                `\n<span class="text-red-400">✗ Encerrado com erro (código ${msg.returncode})</span>`);
+              term.write(`\r\n\x1b[31m✗ Encerrado com erro (código ${msg.returncode})\x1b[0m`);
             }
           }
 
           if (msg.error) {
             evtSource.close();
-            terminal.insertAdjacentHTML('beforeend',
-              `\n<span class="text-red-400">${msg.error}</span>`);
+            term.write('\r\n\x1b[31m' + msg.error + '\x1b[0m');
             submitBtn.disabled = false;
             btnText.textContent = 'Traduzir';
           }
@@ -344,13 +348,12 @@
           submitBtn.disabled = false;
           btnText.textContent = 'Traduzir';
           statusBadge.innerHTML = '<span class="text-red-400">● erro</span>';
-          terminal.insertAdjacentHTML('beforeend',
-            '\n<span class="text-red-400">✗ Conexão perdida. Verifique se o servidor está rodando e se pdf2zh está instalado no PATH.</span>');
-          terminal.scrollTop = terminal.scrollHeight;
+          term.write('\r\n\x1b[31m✗ Conexão perdida. Verifique se o servidor está rodando e se pdf2zh está instalado no PATH.\x1b[0m');
         };
 
       } catch (err) {
-        terminal.innerHTML = `<span class="text-red-400">Erro de rede: ${err.message}</span>`;
+        term.reset();
+        term.write('\x1b[31mErro de rede: ' + err.message + '\x1b[0m');
         submitBtn.disabled = false;
         btnText.textContent = 'Traduzir';
       }
