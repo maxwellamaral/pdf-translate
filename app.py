@@ -97,6 +97,16 @@ def _extract_pages_sync(src: Path, dst: Path, start_page: int, end_page: int) ->
         writer.write(f)
 
 
+def _merge_pdfs_sync(file_paths: list[Path], output_path: Path) -> None:
+    """Concatena múltiplos PDFs em ordem usando pypdf (append preserva bookmarks/metadados)."""
+    writer = PdfWriter()
+    for fp in file_paths:
+        if fp.exists():
+            writer.append(str(fp))
+    with open(output_path, "wb") as f:
+        writer.write(f)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return Path("static/index.html").read_text()
@@ -461,6 +471,16 @@ async def delete_job(job_id: str):
         zip_path = Path(zip_path_str)
         if zip_path.parent.resolve() == out_dir and zip_path.suffix == ".zip":
             zip_path.unlink(missing_ok=True)
+    # Remove PDFs mesclados e ZIP de merge se existirem
+    for merged_fname in job.get("merged_files", []):
+        mp = Path(merged_fname)
+        if mp.parent.resolve() == out_dir and mp.suffix == ".pdf":
+            mp.unlink(missing_ok=True)
+    merge_zip_str = job.get("merge_zip_path")
+    if merge_zip_str:
+        mzp = Path(merge_zip_str)
+        if mzp.parent.resolve() == out_dir and mzp.suffix == ".zip":
+            mzp.unlink(missing_ok=True)
     return {"ok": True, "deleted": deleted, "errors": errors}
 
 
@@ -550,4 +570,116 @@ async def zip_download(job_id: str):
     zip_path = Path(zip_path_str)
     if not zip_path.exists():
         raise HTTPException(status_code=404, detail="Arquivo ZIP não encontrado no servidor")
+    return FileResponse(path=zip_path, filename=zip_path.name, media_type="application/zip")
+
+
+@app.get("/merge/stream/{job_id}")
+async def merge_stream(job_id: str):
+    """Concatena Mono e Dual separadamente, zipa os dois e emite progresso via SSE."""
+    job = jobs.get(job_id)
+
+    async def generate():
+        if not job:
+            yield f"data: {json.dumps({'merge_error': 'Job não encontrado'})}\n\n"
+            return
+
+        output_files: list[str] = job.get("output_files", [])
+        if not output_files:
+            yield f"data: {json.dumps({'line': '\r\n\x1b[31mNenhum arquivo gerado para juntar.\x1b[0m\r\n'})}\n\n"
+            yield f"data: {json.dumps({'merge_error': 'Sem arquivos'})}\n\n"
+            return
+
+        out_dir = Path(job.get("output_dir", str(UPLOAD_DIR))).resolve()
+        in_stem = Path(job.get("input_path", "arquivo")).stem
+        lang_out = job.get("lang_out", "")
+
+        # Separa e ordena pelo nome (batch01 < batch02 … ordenação lexicográfica com zero-pad)
+        mono_files = sorted(
+            [f for f in output_files if f.lower().endswith(".mono.pdf")],
+        )
+        dual_files = sorted(
+            [f for f in output_files if f.lower().endswith(".dual.pdf")],
+        )
+
+        if not mono_files and not dual_files:
+            yield f"data: {json.dumps({'line': '\r\n\x1b[31mNenhum arquivo Mono ou Dual encontrado.\x1b[0m\r\n'})}\n\n"
+            yield f"data: {json.dumps({'merge_error': 'Sem arquivos Mono/Dual'})}\n\n"
+            return
+
+        yield f"data: {json.dumps({'line': '\r\n\x1b[36;1m──── Juntando PDFs ────\x1b[0m\r\n\r\n'})}\n\n"
+
+        loop = asyncio.get_event_loop()
+        merged_paths: list[Path] = []
+
+        for group_label, files in (("Mono", mono_files), ("Dual", dual_files)):
+            if not files:
+                continue
+            suffix = group_label.lower()
+            yield f"data: {json.dumps({'line': f'  \x1b[33m\u25b6 {group_label} \u2014 {len(files)} arquivo(s):\x1b[0m\r\n'})}\n\n"
+            for fname in files:
+                yield f"data: {json.dumps({'line': f'    \x1b[90m+ {fname}\x1b[0m\r\n'})}\n\n"
+
+            out_name = f"{in_stem}.{lang_out}.merged.{suffix}.pdf" if lang_out else f"{in_stem}.merged.{suffix}.pdf"
+            out_path = out_dir / out_name
+
+            # resolve caminhos com validação de path traversal
+            valid_paths: list[Path] = []
+            for fname in files:
+                safe_name = Path(fname).name
+                fp = (out_dir / safe_name).resolve()
+                try:
+                    fp.relative_to(out_dir)
+                except ValueError:
+                    continue
+                valid_paths.append(fp)
+
+            yield f"data: {json.dumps({'line': f'    \x1b[90mMesclando\u2026\x1b[0m\r\n'})}\n\n"
+            try:
+                await loop.run_in_executor(None, _merge_pdfs_sync, valid_paths, out_path)
+            except Exception as exc:
+                yield f"data: {json.dumps({'line': f'\r\n\x1b[31mErro ao mesclar {group_label}: {exc}\x1b[0m\r\n'})}\n\n"
+                yield f"data: {json.dumps({'merge_error': str(exc)})}\n\n"
+                return
+
+            merged_paths.append(out_path)
+            yield f"data: {json.dumps({'line': f'    \x1b[32m\u2713 {out_name}\x1b[0m\r\n\r\n'})}\n\n"
+
+        # Cria o ZIP com os PDFs mesclados
+        zip_filename = f"traducao_{job_id[:8]}.merged.zip"
+        zip_path = out_dir / zip_filename
+
+        yield f"data: {json.dumps({'line': '\r\n\x1b[36;1m──── Compactando ────\x1b[0m\r\n\r\n'})}\n\n"
+        try:
+            zf = zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED)
+            for mp in merged_paths:
+                yield f"data: {json.dumps({'line': f'  \x1b[90m+ {mp.name}\x1b[0m\r\n'})}\n\n"
+                await loop.run_in_executor(None, zf.write, mp, mp.name)
+            await loop.run_in_executor(None, zf.close)
+        except Exception as exc:
+            yield f"data: {json.dumps({'line': f'\r\n\x1b[31mErro ao criar ZIP: {exc}\x1b[0m\r\n'})}\n\n"
+            yield f"data: {json.dumps({'merge_error': str(exc)})}\n\n"
+            return
+
+        size_mb = zip_path.stat().st_size / (1024 * 1024)
+        yield f"data: {json.dumps({'line': f'\r\n\x1b[32;1m\u2713 Pronto! {len(merged_paths)} PDF(s) mesclado(s) ({size_mb:.1f}\u00a0MB)\x1b[0m\r\n'})}\n\n"
+        job["merge_zip_path"] = str(zip_path)
+        job["merged_files"] = [str(p) for p in merged_paths]
+        yield f"data: {json.dumps({'merge_ready': True, 'filename': zip_filename})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/merge/download/{job_id}")
+async def merge_download(job_id: str):
+    """Retorna o ZIP com os PDFs mesclados."""
+    from fastapi import HTTPException
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado")
+    zip_path_str = job.get("merge_zip_path")
+    if not zip_path_str:
+        raise HTTPException(status_code=404, detail="Merge ZIP ainda não criado — use /merge/stream/{job_id} primeiro")
+    zip_path = Path(zip_path_str)
+    if not zip_path.exists():
+        raise HTTPException(status_code=404, detail="Arquivo ZIP de merge não encontrado no servidor")
     return FileResponse(path=zip_path, filename=zip_path.name, media_type="application/zip")

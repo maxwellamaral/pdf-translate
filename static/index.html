@@ -236,15 +236,26 @@
       <div class="bg-gray-900 rounded-2xl p-5">
         <div class="flex items-center justify-between mb-3">
           <p class="text-sm font-medium text-gray-300">Arquivos gerados</p>
-          <button id="download-all-btn"
-                  class="hidden inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-all"
-                  onclick="downloadAll()">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-            </svg>
-            Baixar todos (ZIP)
-          </button>
+          <div class="flex gap-2">
+            <button id="merge-btn"
+                    class="hidden inline-flex items-center gap-2 bg-violet-700 hover:bg-violet-600 active:scale-95 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-all"
+                    onclick="joinAll()">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"/>
+              </svg>
+              Juntar todos
+            </button>
+            <button id="download-all-btn"
+                    class="hidden inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-all"
+                    onclick="downloadAll()">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+              </svg>
+              Baixar todos (ZIP)
+            </button>
+          </div>
         </div>
         <div id="download-links" class="flex gap-3 flex-wrap"></div>
       </div>
@@ -334,12 +345,28 @@
       </svg> Baixar todos (ZIP)`;
     }
 
+    function _showMergeBtnIfNeeded() {
+      // Exibe o botão Juntar apenas quando há arquivos de batch
+      const links = document.getElementById('download-links');
+      const hasBatch = Array.from(links.querySelectorAll('a[data-file]'))
+        .some(a => a.dataset.file.includes('.batch'));
+      if (!hasBatch) return;
+      const btn = document.getElementById('merge-btn');
+      btn.classList.remove('hidden');
+      if (btn.disabled) return;
+      btn.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"/>
+      </svg> Juntar todos`;
+    }
+
     function showDownloads(files, jobId) {
       const links = document.getElementById('download-links');
       links.innerHTML = '';
       files.forEach(filename => _appendDownloadLink(links, filename, jobId));
       document.getElementById('downloads').classList.remove('hidden');
       _showDownloadAllBtn();
+      _showMergeBtnIfNeeded();
     }
 
     function addDownloadFiles(files, jobId) {
@@ -347,6 +374,7 @@
       files.forEach(filename => _appendDownloadLink(links, filename, jobId));
       document.getElementById('downloads').classList.remove('hidden');
       _showDownloadAllBtn();
+      _showMergeBtnIfNeeded();
     }
 
     function downloadAll() {
@@ -380,6 +408,46 @@
           es.close();
           btn.disabled = false;
           btn.textContent = '✗ Erro ao compactar';
+        }
+      };
+      es.onerror = () => {
+        es.close();
+        btn.disabled = false;
+        btn.textContent = '✗ Erro de conexão';
+      };
+    }
+
+    function joinAll() {
+      if (!currentJobId) return;
+      const btn = document.getElementById('merge-btn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Juntando...';
+
+      const es = new EventSource(`/merge/stream/${currentJobId}`);
+      es.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+
+        if (msg.line) {
+          term.write(msg.line);
+          logLines.push(msg.line);
+        }
+
+        if (msg.merge_ready) {
+          es.close();
+          const a = document.createElement('a');
+          a.href = `/merge/download/${currentJobId}`;
+          a.download = msg.filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          btn.disabled = false;
+          _showMergeBtnIfNeeded();
+        }
+
+        if (msg.merge_error || msg.error) {
+          es.close();
+          btn.disabled = false;
+          btn.textContent = '✗ Erro ao juntar';
         }
       };
       es.onerror = () => {
@@ -505,6 +573,7 @@
         document.getElementById('downloads').classList.add('hidden');
         document.getElementById('download-links').innerHTML = '';
         document.getElementById('download-all-btn').classList.add('hidden');
+        document.getElementById('merge-btn').classList.add('hidden');
         submitBtn.disabled = true;
         cancelBtn.style.display = '';
         document.getElementById('pause-btn').style.display = '';
