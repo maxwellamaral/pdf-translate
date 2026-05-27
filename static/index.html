@@ -231,6 +231,21 @@
 
     </div>
 
+    <!-- Barra de progresso batch (só exibida em modo batch) -->
+    <div id="batch-progress" class="hidden mt-3">
+      <div class="bg-gray-900 rounded-2xl px-5 py-4">
+        <div class="flex items-center justify-between mb-2.5">
+          <span id="batch-progress-label" class="text-xs font-mono text-gray-400"></span>
+          <span id="batch-progress-pct" class="text-xs font-mono text-gray-500"></span>
+        </div>
+        <div class="w-full bg-gray-800 rounded-full h-2.5 overflow-hidden">
+          <div id="batch-progress-fill"
+               class="h-full rounded-full transition-all duration-500 ease-in-out bg-gradient-to-r from-blue-600 to-blue-400"
+               style="width: 0%"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Downloads -->
     <div id="downloads" class="hidden mt-4">
       <div class="bg-gray-900 rounded-2xl p-5">
@@ -332,6 +347,49 @@
       document.getElementById('pause-btn').style.display = 'none';
       document.getElementById('btn-text').textContent = 'Traduzir';
       isPaused = false;
+    }
+
+    // ── Barra de progresso batch ─────────────────────────────────────────────
+    function _batchProgressUpdate(batchNum, batchTotal, pageStart, pageEnd, singlePage, isDone) {
+      const bar    = document.getElementById('batch-progress');
+      const fill   = document.getElementById('batch-progress-fill');
+      const label  = document.getElementById('batch-progress-label');
+      const pctEl  = document.getElementById('batch-progress-pct');
+
+      bar.classList.remove('hidden');
+
+      // completedNum = quantos batches já foram concluídos
+      const completedNum = isDone ? batchNum : batchNum - 1;
+      const pct = Math.round((completedNum / batchTotal) * 100);
+      fill.style.width = pct + '%';
+      pctEl.textContent = pct + '%';
+
+      // label sempre mostra concluídos / total (consistente com o fill)
+      if (singlePage !== null) {
+        label.textContent = singlePage
+          ? `Página ${completedNum} / ${batchTotal}`
+          : `Batch ${completedNum} / ${batchTotal}`;
+      }
+    }
+
+    function _batchProgressComplete() {
+      const fill  = document.getElementById('batch-progress-fill');
+      const pctEl = document.getElementById('batch-progress-pct');
+      fill.style.width = '100%';
+      pctEl.textContent = '100%';
+      // oculta após breve pausa para o usuário ver 100%
+      setTimeout(() => {
+        document.getElementById('batch-progress').classList.add('hidden');
+      }, 1200);
+    }
+
+    function _batchProgressReset() {
+      const bar  = document.getElementById('batch-progress');
+      const fill = document.getElementById('batch-progress-fill');
+      bar.classList.add('hidden');
+      fill.style.width = '0%';
+      document.getElementById('batch-progress-label').textContent = '';
+      document.getElementById('batch-progress-pct').textContent = '';
     }
 
     function _showDownloadAllBtn() {
@@ -574,6 +632,7 @@
         document.getElementById('download-links').innerHTML = '';
         document.getElementById('download-all-btn').classList.add('hidden');
         document.getElementById('merge-btn').classList.add('hidden');
+        _batchProgressReset();
         submitBtn.disabled = true;
         cancelBtn.style.display = '';
         document.getElementById('pause-btn').style.display = '';
@@ -614,6 +673,7 @@
                 statusBadge.innerHTML =
                   `<span class="text-yellow-400 animate-pulse">● batch ${msg.batch_num}/${msg.batch_total} (págs. ${msg.page_start}–${msg.page_end})</span>`;
               }
+              _batchProgressUpdate(msg.batch_num, msg.batch_total, msg.page_start, msg.page_end, msg.single_page, false);
             }
 
             if (msg.pages_start) {
@@ -623,11 +683,13 @@
 
             if (msg.batch_done) {
               addDownloadFiles(msg.files, currentJobId);
+              _batchProgressUpdate(msg.batch_num, msg.batch_total, null, null, null, true);
             }
 
             if (msg.done) {
               currentEvtSource.close();
               currentEvtSource = null;
+              _batchProgressComplete();
               if (msg.returncode === 0) {
                 statusBadge.innerHTML = '<span class="text-green-400">✓ concluído</span>';
                 term.write('\r\n\x1b[32;1m✓ Tradução concluída!\x1b[0m');
@@ -645,6 +707,7 @@
             if (msg.error) {
               currentEvtSource.close();
               currentEvtSource = null;
+              _batchProgressReset();
               term.write('\r\n\x1b[31m' + msg.error + '\x1b[0m');
               document.getElementById('download-log-btn').style.display = '';
               resetUI();
