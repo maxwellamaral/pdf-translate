@@ -27,10 +27,10 @@
       </div>
     </header>
 
-    <div class="grid grid-cols-1 lg:grid-cols-5 gap-6">
+    <div id="main-split" class="flex gap-0 items-stretch">
 
       <!-- Form Panel -->
-      <div class="lg:col-span-2 bg-gray-900 rounded-2xl p-6 space-y-5">
+      <div id="form-panel" class="bg-gray-900 rounded-2xl p-6 space-y-5 shrink-0" style="width: 427px; min-width: 280px; max-width: 720px;">
         <form id="form" class="space-y-5">
 
           <!-- File Input -->
@@ -203,8 +203,14 @@
         </form>
       </div>
 
+      <!-- Resize Handle -->
+      <div id="resize-handle"
+           style="width:10px; cursor:col-resize; flex-shrink:0; display:flex; align-items:center; justify-content:center; margin:0 2px;">
+        <div style="width:3px; height:48px; border-radius:2px; background:rgba(75,85,99,0.5);"></div>
+      </div>
+
       <!-- Terminal Panel -->
-      <div class="lg:col-span-3 bg-gray-900 rounded-2xl overflow-hidden flex flex-col" style="min-height: 520px;">
+      <div id="terminal-panel" class="bg-gray-900 rounded-2xl overflow-hidden flex flex-col" style="flex:1; min-width:320px; min-height:520px;">
         <!-- Terminal titlebar -->
         <div class="bg-gray-800/60 px-4 py-3 flex items-center gap-2 border-b border-gray-800 shrink-0">
           <div class="flex gap-1.5">
@@ -855,6 +861,52 @@
           '<span class="text-yellow-400 animate-pulse">● em andamento</span>';
       }
     });
+
+    // ── Resize handle ────────────────────────────────────────────────────────
+    (function () {
+      const handle    = document.getElementById('resize-handle');
+      const formPanel = document.getElementById('form-panel');
+      let dragging = false;
+      let startX   = 0;
+      let startW   = 0;
+
+      handle.addEventListener('mousedown', e => {
+        dragging = true;
+        startX   = e.clientX;
+        startW   = formPanel.offsetWidth;
+        document.body.style.cursor    = 'col-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        const delta = e.clientX - startX;
+        const min   = parseInt(formPanel.style.minWidth) || 280;
+        const max   = parseInt(formPanel.style.maxWidth) || 720;
+        const newW  = Math.min(max, Math.max(min, startW + delta));
+        formPanel.style.width = newW + 'px';
+        // reajusta o terminal ao novo tamanho
+        if (typeof fitAddon !== 'undefined') fitAddon.fit();
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        document.body.style.cursor     = '';
+        document.body.style.userSelect = '';
+        if (typeof fitAddon !== 'undefined') fitAddon.fit();
+      });
+
+      // feedback visual ao hover
+      handle.addEventListener('mouseenter', () => {
+        handle.querySelector('div').style.background = 'rgba(59,130,246,0.7)';
+      });
+      handle.addEventListener('mouseleave', () => {
+        if (!dragging)
+          handle.querySelector('div').style.background = 'rgba(75,85,99,0.5)';
+      });
+    })();
   </script>
 </body>
 </html>
