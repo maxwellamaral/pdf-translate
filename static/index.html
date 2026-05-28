@@ -243,6 +243,10 @@
                class="h-full rounded-full transition-all duration-500 ease-in-out bg-gradient-to-r from-blue-600 to-blue-400"
                style="width: 0%"></div>
         </div>
+        <div class="flex items-center justify-between mt-2">
+          <span id="batch-progress-elapsed"  class="text-xs font-mono text-gray-600"></span>
+          <span id="batch-progress-remaining" class="text-xs font-mono text-gray-600"></span>
+        </div>
       </div>
     </div>
 
@@ -315,6 +319,13 @@
     let currentJobId = null;
     let logLines = [];
     let isPaused = false;
+    let _batchStartTime = null;
+    let _batchTimerInt  = null;
+    let _batchCompleted = 0;
+    let _batchTotalVar  = 0;
+    let _batchPausedMs  = 0;
+    let _batchPauseTime = null;
+    let _batchRemainingMs = null;  // ETA calculado no último batch_done
 
     const ANSI_RE = /\x1b\[[\d;]*[A-Za-z]|\x1b[()][AB012]/g;
 
@@ -350,6 +361,25 @@
     }
 
     // ── Barra de progresso batch ─────────────────────────────────────────────
+    function _batchTimerFmt(ms) {
+      const s = Math.max(0, Math.round(ms / 1000));
+      const m = Math.floor(s / 60);
+      return `${String(m).padStart(2,'0')}:${String(s % 60).padStart(2,'0')}`;
+    }
+
+    function _batchTimerTick() {
+      if (_batchStartTime === null) return;
+      const elapsed = Date.now() - _batchStartTime - _batchPausedMs;
+      document.getElementById('batch-progress-elapsed').textContent =
+        `⏱ ${_batchTimerFmt(elapsed)}`;
+      // countdown: decrementa 1s por tick a partir do ETA calculado no último batch_done
+      if (_batchRemainingMs !== null) {
+        _batchRemainingMs = Math.max(0, _batchRemainingMs - 1000);
+        document.getElementById('batch-progress-remaining').textContent =
+          _batchRemainingMs > 0 ? `~${_batchTimerFmt(_batchRemainingMs)} restante` : '';
+      }
+    }
+
     function _batchProgressUpdate(batchNum, batchTotal, pageStart, pageEnd, singlePage, isDone) {
       const bar    = document.getElementById('batch-progress');
       const fill   = document.getElementById('batch-progress-fill');
@@ -360,6 +390,16 @@
 
       // completedNum = quantos batches já foram concluídos
       const completedNum = isDone ? batchNum : batchNum - 1;
+      _batchCompleted = completedNum;
+      _batchTotalVar  = batchTotal;
+
+      // recalcula ETA apenas quando um batch conclui (isDone=true)
+      if (isDone && completedNum > 0) {
+        const elapsed = Date.now() - _batchStartTime - _batchPausedMs;
+        const rateMs  = elapsed / completedNum;
+        _batchRemainingMs = Math.round(rateMs * (_batchTotalVar - completedNum));
+      }
+
       const pct = Math.round((completedNum / batchTotal) * 100);
       fill.style.width = pct + '%';
       pctEl.textContent = pct + '%';
@@ -370,9 +410,26 @@
           ? `Página ${completedNum} / ${batchTotal}`
           : `Batch ${completedNum} / ${batchTotal}`;
       }
+
+      // inicia timer na primeira chamada
+      if (_batchStartTime === null) {
+        _batchStartTime = Date.now();
+        clearInterval(_batchTimerInt);
+        _batchTimerInt = setInterval(_batchTimerTick, 1000);
+      }
+      _batchTimerTick();
     }
 
     function _batchProgressComplete() {
+      clearInterval(_batchTimerInt);
+      _batchTimerInt = null;
+      // exibe tempo decorrido final e limpa estimativa
+      if (_batchStartTime !== null) {
+        const elapsed = Date.now() - _batchStartTime - _batchPausedMs;
+        document.getElementById('batch-progress-elapsed').textContent =
+          `⏱ ${_batchTimerFmt(elapsed)}`;
+      }
+      document.getElementById('batch-progress-remaining').textContent = '';
       const fill  = document.getElementById('batch-progress-fill');
       const pctEl = document.getElementById('batch-progress-pct');
       fill.style.width = '100%';
@@ -384,12 +441,22 @@
     }
 
     function _batchProgressReset() {
+      clearInterval(_batchTimerInt);
+      _batchTimerInt  = null;
+      _batchStartTime = null;
+      _batchCompleted = 0;
+      _batchTotalVar  = 0;
+      _batchPausedMs  = 0;
+      _batchPauseTime = null;
+      _batchRemainingMs = null;
       const bar  = document.getElementById('batch-progress');
       const fill = document.getElementById('batch-progress-fill');
       bar.classList.add('hidden');
       fill.style.width = '0%';
       document.getElementById('batch-progress-label').textContent = '';
       document.getElementById('batch-progress-pct').textContent = '';
+      document.getElementById('batch-progress-elapsed').textContent = '';
+      document.getElementById('batch-progress-remaining').textContent = '';
     }
 
     function _showDownloadAllBtn() {
@@ -753,6 +820,7 @@
       document.getElementById('status-badge').innerHTML =
         '<span class="text-yellow-400">⦸ cancelado</span>';
       term.write('\r\n\x1b[33m⦸ Tradução cancelada pelo usuário.\x1b[0m');
+      _batchProgressReset();
       resetUI();
     });
 
@@ -761,6 +829,10 @@
       if (!isPaused) {
         try { await fetch(`/pause/${currentJobId}`, { method: 'POST' }); } catch (_) {}
         isPaused = true;
+        // pausa o timer de progresso
+        clearInterval(_batchTimerInt);
+        _batchTimerInt  = null;
+        _batchPauseTime = Date.now();
         document.getElementById('pause-text').textContent = 'Retomar';
         document.getElementById('pause-path').setAttribute('d', 'M5 3l14 9-14 9V3z');
         document.getElementById('status-badge').innerHTML =
@@ -768,6 +840,15 @@
       } else {
         try { await fetch(`/resume/${currentJobId}`, { method: 'POST' }); } catch (_) {}
         isPaused = false;
+        // retoma o timer de progresso acumulando o tempo pausado
+        if (_batchPauseTime !== null) {
+          _batchPausedMs  += Date.now() - _batchPauseTime;
+          _batchPauseTime  = null;
+        }
+        if (_batchStartTime !== null && _batchTimerInt === null) {
+          _batchTimerInt = setInterval(_batchTimerTick, 1000);
+          _batchTimerTick();
+        }
         document.getElementById('pause-text').textContent = 'Pausar';
         document.getElementById('pause-path').setAttribute('d', 'M10 9v6m4-6v6');
         document.getElementById('status-badge').innerHTML =
