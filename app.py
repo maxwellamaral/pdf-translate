@@ -17,6 +17,9 @@ from fastapi.staticfiles import StaticFiles
 app = FastAPI(title="PDF Translate")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+def sse_line(data: dict) -> str:
+    return "data: " + json.dumps(data) + "\n\n"
+
 UPLOAD_DIR = Path("/tmp/pdf2zh_uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
@@ -512,20 +515,20 @@ async def zip_stream(job_id: str):
 
     async def generate():
         if not job:
-            yield f"data: {json.dumps({'zip_error': 'Job não encontrado'})}\n\n"
+            yield sse_line({'zip_error': 'Job não encontrado'})
             return
 
         output_files: list[str] = job.get("output_files", [])
         if not output_files:
-            yield f"data: {json.dumps({'line': '\r\n\x1b[31mNenhum arquivo gerado para compactar.\x1b[0m\r\n'})}\n\n"
-            yield f"data: {json.dumps({'zip_error': 'Sem arquivos'})}\n\n"
+            yield sse_line({'line': '\r\n\x1b[31mNenhum arquivo gerado para compactar.\x1b[0m\r\n'})
+            yield sse_line({'zip_error': 'Sem arquivos'})
             return
 
         out_dir = Path(job.get("output_dir", str(UPLOAD_DIR))).resolve()
         zip_filename = f"traducao_{job_id[:8]}.zip"
         zip_path = out_dir / zip_filename
 
-        yield f"data: {json.dumps({'line': '\r\n\x1b[36;1m──── Compactando arquivos ────\x1b[0m\r\n\r\n'})}\n\n"
+        yield sse_line({'line': '\r\n\x1b[36;1m──── Compactando arquivos ────\x1b[0m\r\n\r\n'})
 
         added = 0
         loop = asyncio.get_event_loop()
@@ -540,19 +543,19 @@ async def zip_stream(job_id: str):
                     continue
                 if not file_path.exists():
                     continue
-                yield f"data: {json.dumps({'line': f'  \x1b[90m+ {safe_name}\x1b[0m\r\n'})}\n\n"
+                yield sse_line({'line': f'  \x1b[90m+ {safe_name}\x1b[0m\r\n'})
                 await loop.run_in_executor(None, zf.write, file_path, safe_name)
                 added += 1
             await loop.run_in_executor(None, zf.close)
         except Exception as exc:
-            yield f"data: {json.dumps({'line': f'\r\n\x1b[31mErro: {exc}\x1b[0m\r\n'})}\n\n"
-            yield f"data: {json.dumps({'zip_error': str(exc)})}\n\n"
+            yield sse_line({'line': f'\r\n\x1b[31mErro: {exc}\x1b[0m\r\n'})
+            yield sse_line({'zip_error': str(exc)})
             return
 
         size_mb = zip_path.stat().st_size / (1024 * 1024)
-        yield f"data: {json.dumps({'line': f'\r\n\x1b[32;1m\u2713 ZIP criado com {added} arquivo(s) ({size_mb:.1f}\u00a0MB)\x1b[0m\r\n'})}\n\n"
+        yield sse_line({'line': f'\r\n\x1b[32;1m\u2713 ZIP criado com {added} arquivo(s) ({size_mb:.1f}\u00a0MB)\x1b[0m\r\n'})
         job["zip_path"] = str(zip_path)
-        yield f"data: {json.dumps({'zip_ready': True, 'filename': zip_filename})}\n\n"
+        yield sse_line({'zip_ready': True, 'filename': zip_filename})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -580,13 +583,13 @@ async def merge_stream(job_id: str):
 
     async def generate():
         if not job:
-            yield f"data: {json.dumps({'merge_error': 'Job não encontrado'})}\n\n"
+            yield sse_line({'merge_error': 'Job não encontrado'})
             return
 
         output_files: list[str] = job.get("output_files", [])
         if not output_files:
-            yield f"data: {json.dumps({'line': '\r\n\x1b[31mNenhum arquivo gerado para juntar.\x1b[0m\r\n'})}\n\n"
-            yield f"data: {json.dumps({'merge_error': 'Sem arquivos'})}\n\n"
+            yield sse_line({'line': '\r\n\x1b[31mNenhum arquivo gerado para juntar.\x1b[0m\r\n'})
+            yield sse_line({'merge_error': 'Sem arquivos'})
             return
 
         out_dir = Path(job.get("output_dir", str(UPLOAD_DIR))).resolve()
@@ -602,11 +605,11 @@ async def merge_stream(job_id: str):
         )
 
         if not mono_files and not dual_files:
-            yield f"data: {json.dumps({'line': '\r\n\x1b[31mNenhum arquivo Mono ou Dual encontrado.\x1b[0m\r\n'})}\n\n"
-            yield f"data: {json.dumps({'merge_error': 'Sem arquivos Mono/Dual'})}\n\n"
+            yield sse_line({'line': '\r\n\x1b[31mNenhum arquivo Mono ou Dual encontrado.\x1b[0m\r\n'})
+            yield sse_line({'merge_error': 'Sem arquivos Mono/Dual'})
             return
 
-        yield f"data: {json.dumps({'line': '\r\n\x1b[36;1m──── Juntando PDFs ────\x1b[0m\r\n\r\n'})}\n\n"
+        yield sse_line({'line': '\r\n\x1b[36;1m──── Juntando PDFs ────\x1b[0m\r\n\r\n'})
 
         loop = asyncio.get_event_loop()
         merged_paths: list[Path] = []
@@ -615,9 +618,9 @@ async def merge_stream(job_id: str):
             if not files:
                 continue
             suffix = group_label.lower()
-            yield f"data: {json.dumps({'line': f'  \x1b[33m\u25b6 {group_label} \u2014 {len(files)} arquivo(s):\x1b[0m\r\n'})}\n\n"
+            yield sse_line({'line': f'  \x1b[33m\u25b6 {group_label} \u2014 {len(files)} arquivo(s):\x1b[0m\r\n'})
             for fname in files:
-                yield f"data: {json.dumps({'line': f'    \x1b[90m+ {fname}\x1b[0m\r\n'})}\n\n"
+                yield sse_line({'line': f'    \x1b[90m+ {fname}\x1b[0m\r\n'})
 
             out_name = f"{in_stem}.{lang_out}.merged.{suffix}.pdf" if lang_out else f"{in_stem}.merged.{suffix}.pdf"
             out_path = out_dir / out_name
@@ -633,38 +636,38 @@ async def merge_stream(job_id: str):
                     continue
                 valid_paths.append(fp)
 
-            yield f"data: {json.dumps({'line': f'    \x1b[90mMesclando\u2026\x1b[0m\r\n'})}\n\n"
+            yield sse_line({'line': f'    \x1b[90mMesclando\u2026\x1b[0m\r\n'})
             try:
                 await loop.run_in_executor(None, _merge_pdfs_sync, valid_paths, out_path)
             except Exception as exc:
-                yield f"data: {json.dumps({'line': f'\r\n\x1b[31mErro ao mesclar {group_label}: {exc}\x1b[0m\r\n'})}\n\n"
-                yield f"data: {json.dumps({'merge_error': str(exc)})}\n\n"
+                yield sse_line({'line': f'\r\n\x1b[31mErro ao mesclar {group_label}: {exc}\x1b[0m\r\n'})
+                yield sse_line({'merge_error': str(exc)})
                 return
 
             merged_paths.append(out_path)
-            yield f"data: {json.dumps({'line': f'    \x1b[32m\u2713 {out_name}\x1b[0m\r\n\r\n'})}\n\n"
+            yield sse_line({'line': f'    \x1b[32m\u2713 {out_name}\x1b[0m\r\n\r\n'})
 
         # Cria o ZIP com os PDFs mesclados
         zip_filename = f"traducao_{job_id[:8]}.merged.zip"
         zip_path = out_dir / zip_filename
 
-        yield f"data: {json.dumps({'line': '\r\n\x1b[36;1m──── Compactando ────\x1b[0m\r\n\r\n'})}\n\n"
+        yield sse_line({'line': '\r\n\x1b[36;1m──── Compactando ────\x1b[0m\r\n\r\n'})
         try:
             zf = zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED)
             for mp in merged_paths:
-                yield f"data: {json.dumps({'line': f'  \x1b[90m+ {mp.name}\x1b[0m\r\n'})}\n\n"
+                yield sse_line({'line': f'  \x1b[90m+ {mp.name}\x1b[0m\r\n'})
                 await loop.run_in_executor(None, zf.write, mp, mp.name)
             await loop.run_in_executor(None, zf.close)
         except Exception as exc:
-            yield f"data: {json.dumps({'line': f'\r\n\x1b[31mErro ao criar ZIP: {exc}\x1b[0m\r\n'})}\n\n"
-            yield f"data: {json.dumps({'merge_error': str(exc)})}\n\n"
+            yield sse_line({'line': f'\r\n\x1b[31mErro ao criar ZIP: {exc}\x1b[0m\r\n'})
+            yield sse_line({'merge_error': str(exc)})
             return
 
         size_mb = zip_path.stat().st_size / (1024 * 1024)
-        yield f"data: {json.dumps({'line': f'\r\n\x1b[32;1m\u2713 Pronto! {len(merged_paths)} PDF(s) mesclado(s) ({size_mb:.1f}\u00a0MB)\x1b[0m\r\n'})}\n\n"
+        yield sse_line({'line': f'\r\n\x1b[32;1m\u2713 Pronto! {len(merged_paths)} PDF(s) mesclado(s) ({size_mb:.1f}\u00a0MB)\x1b[0m\r\n'})
         job["merge_zip_path"] = str(zip_path)
         job["merged_files"] = [str(p) for p in merged_paths]
-        yield f"data: {json.dumps({'merge_ready': True, 'filename': zip_filename})}\n\n"
+        yield sse_line({'merge_ready': True, 'filename': zip_filename})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

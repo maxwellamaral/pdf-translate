@@ -19,6 +19,8 @@ services:
       # Docker Desktop provê host.docker.internal automaticamente (não precisa extra_hosts).
       # O WSL2 faz port-forward de Ollama para o host Windows, que é acessível via host.docker.internal.
       - OLLAMA_HOST=http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
